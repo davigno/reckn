@@ -169,6 +169,23 @@ All data in `~/.config/reckn/`:
 - `pads/<name>.json` - saved pads
 - `currency_cache.json` - cached exchange rates
 
+## Roadmap
+
+Planned for future releases:
+
+- Math functions (sqrt, log, sin, cos, tan, abs, round, floor, ceil, min, max)
+- Undo/redo (Ctrl+Z / Ctrl+Shift+Z)
+- Time zone conversions
+- Proportions ("3 is to 6 as what is to 10")
+- Multiple tabs/sheets
+- Export to CSV
+- Custom color themes
+- Custom user-defined units
+
+## About
+
+I'm a product person, not a developer. This project was built entirely with [Claude Code](https://claude.ai/claude-code) by Anthropic - I brought the idea and the product direction, Claude wrote the code.
+
 ## License
 
 MIT
