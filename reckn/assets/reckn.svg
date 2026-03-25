@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Background card -->
+  <rect x="16" y="16" width="224" height="224" rx="24" fill="#1e1e2e"/>
+
+  <!-- Header bar -->
+  <rect x="16" y="16" width="224" height="44" rx="24" fill="#313244"/>
+  <rect x="16" y="36" width="224" height="24" fill="#313244"/>
+
+  <!-- Equals symbol in header -->
+  <rect x="108" y="28" width="40" height="5" rx="2.5" fill="#cdd6f4"/>
+  <rect x="108" y="38" width="40" height="5" rx="2.5" fill="#cdd6f4"/>
+
+  <!-- Expression lines (left side - muted) -->
+  <rect x="36" y="80" width="96" height="10" rx="5" fill="#585b70"/>
+  <rect x="36" y="112" width="72" height="10" rx="5" fill="#585b70"/>
+  <rect x="36" y="144" width="108" height="10" rx="5" fill="#585b70"/>
+  <rect x="36" y="176" width="60" height="10" rx="5" fill="#585b70"/>
+
+  <!-- Result lines (right side - green accent) -->
+  <rect x="168" y="80" width="52" height="10" rx="5" fill="#a6e3a1"/>
+  <rect x="180" y="112" width="40" height="10" rx="5" fill="#a6e3a1"/>
+  <rect x="164" y="144" width="56" height="10" rx="5" fill="#a6e3a1"/>
+  <rect x="176" y="176" width="44" height="10" rx="5" fill="#a6e3a1"/>
+
+  <!-- Subtotal line -->
+  <rect x="36" y="204" width="184" height="2" rx="1" fill="#45475a"/>
+  <rect x="172" y="214" width="48" height="10" rx="5" fill="#f9e2af"/>
+</svg>
