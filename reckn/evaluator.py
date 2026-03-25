@@ -87,6 +87,31 @@ def is_known_currency(name: str) -> bool:
     return currencies.is_currency(name)
 
 
+import math
+
+# Math functions registry: name -> (function, min_args, max_args)
+MATH_FUNCTIONS = {
+    "sqrt": (math.sqrt, 1, 1),
+    "log": (math.log, 1, 1),
+    "log2": (math.log2, 1, 1),
+    "log10": (math.log10, 1, 1),
+    "sin": (math.sin, 1, 1),
+    "cos": (math.cos, 1, 1),
+    "tan": (math.tan, 1, 1),
+    "abs": (abs, 1, 1),
+    "round": (round, 1, 2),
+    "floor": (math.floor, 1, 1),
+    "ceil": (math.ceil, 1, 1),
+    "min": (min, 2, 99),
+    "max": (max, 2, 99),
+}
+
+
+def is_math_function(name: str) -> bool:
+    """Check if a name is a known math function."""
+    return name.lower() in MATH_FUNCTIONS
+
+
 def get_unit_info(unit_name: str) -> Optional[Tuple[str, float, str]]:
     """Get unit info: (category, base_multiplier, canonical_name)."""
     units = _get_units_module()
@@ -619,6 +644,51 @@ class Evaluator:
 
         return self.parse_primary()
 
+    def _parse_function_call(self, func_name: str) -> Value:
+        """Parse a function call: func_name(arg1, arg2, ...)."""
+        self.advance()  # consume function name
+        self.advance()  # consume (
+
+        # Parse arguments
+        args = []
+        if self.current().type != TokenType.RPAREN:
+            args.append(self.parse_conversion())
+            while self.current().type == TokenType.COMMA:
+                self.advance()  # consume ,
+                args.append(self.parse_conversion())
+
+        if self.current().type != TokenType.RPAREN:
+            raise ValueError(f"Missing closing parenthesis for {func_name}()")
+        self.advance()  # consume )
+
+        func, min_args, max_args = MATH_FUNCTIONS[func_name.lower()]
+        if not (min_args <= len(args) <= max_args):
+            raise ValueError(f"{func_name}() expects {min_args}-{max_args} arguments, got {len(args)}")
+
+        # Extract numeric values
+        raw_values = []
+        for arg in args:
+            if not isinstance(arg.value, (int, float)):
+                raise ValueError(f"{func_name}() requires numeric arguments")
+            raw_values.append(arg.value)
+
+        # round() needs int for second arg (decimal places)
+        if func_name.lower() == 'round' and len(raw_values) == 2:
+            raw_values[1] = int(raw_values[1])
+
+        # Apply function
+        result_value = func(*raw_values)
+
+        # Unit handling: abs and round preserve units, others strip them
+        if func_name.lower() in ('abs', 'round', 'floor', 'ceil') and len(args) == 1:
+            return Value(float(result_value), args[0].unit)
+        if func_name.lower() in ('min', 'max'):
+            # All args must have same unit (or no unit)
+            first_unit = args[0].unit
+            if all(a.unit == first_unit for a in args):
+                return Value(float(result_value), first_unit)
+        return Value.plain(float(result_value))
+
     def parse_primary(self) -> Value:
         """Parse primary expressions: numbers, variables, line refs, parentheses."""
         token = self.current()
@@ -675,6 +745,25 @@ class Evaluator:
 
         # Variable or unit-attached expression
         if token.type == TokenType.IDENTIFIER:
+            # Check for math function call: identifier followed by (
+            if is_math_function(token.value) and self.peek().type == TokenType.LPAREN:
+                result = self._parse_function_call(token.value)
+                # Check for unit suffix: sqrt(144) km, abs(-5) USD
+                if self.current().type == TokenType.CURRENCY_SYMBOL:
+                    symbol = self.advance().value
+                    currencies = _get_currencies_module()
+                    iso = currencies.normalize_currency(symbol)
+                    if iso:
+                        return Value(result.value, Unit.currency(iso))
+                if self.current().type == TokenType.IDENTIFIER:
+                    unit_name = self.current().value
+                    if unit_name.lower() not in ('in', 'to', 'as'):
+                        unit = parse_unit(unit_name)
+                        if unit:
+                            self.advance()
+                            return Value(result.value, unit)
+                return result
+
             self.advance()
             var_name = token.value
 

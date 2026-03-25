@@ -15,6 +15,7 @@ class TokenType(Enum):
     RPAREN = auto()
     EQUALS = auto()
     CURRENCY_SYMBOL = auto()  # $, €, £, ¥ and compound symbols like R$
+    COMMA = auto()
     EOF = auto()
 
 
@@ -143,6 +144,11 @@ class Tokenizer:
             elif char == '=':
                 self.advance()
                 tokens.append(Token(TokenType.EQUALS, char, start_pos))
+
+            # Comma (for function arguments)
+            elif char == ',':
+                self.advance()
+                tokens.append(Token(TokenType.COMMA, char, start_pos))
 
             # Currency symbols
             elif char in CURRENCY_SYMBOLS:

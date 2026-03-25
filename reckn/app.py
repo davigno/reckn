@@ -821,6 +821,18 @@ class HelpScreen(ModalScreen[str]):
         example("3:35pm - 11:00am", "4 hr 35 min")
         example("5.5 hours as timespan", "5 hr 30 min")
 
+        heading("MATH FUNCTIONS")
+        example("sqrt(144)", "12")
+        example("abs(-42)", "42")
+        example("round(3.7)", "4")
+        example("round(3.14159, 2)", "3.14")
+        example("floor(3.9) / ceil(3.1)", "3 / 4")
+        example("min(10, 20, 5)", "5")
+        example("max(line1, line2)", "(largest)")
+        example("log(100) / log10(100)", "4.61 / 2")
+        example("sin(0) / cos(0)", "0 / 1")
+        note("abs, round, floor, ceil preserve units")
+
         t.append("\n")
         note("Press Escape or F2 to close")
 

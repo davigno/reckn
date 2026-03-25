@@ -151,6 +151,23 @@ from March 1 to April 1      → 1 month
 5.5 hours as timespan        → 5 hr 30 min
 ```
 
+### Math Functions
+
+```
+sqrt(144)                    → 12
+abs(-42)                     → 42
+round(3.14159, 2)            → 3.14
+floor(3.9)                   → 3
+ceil(3.1)                    → 4
+min(10, 20, 5)               → 5
+max(3, 7, 1)                 → 7
+log(1)                       → 0
+log10(100)                   → 2
+sin(0) / cos(0)              → 0 / 1
+sqrt(144) km                 → 12 km          (unit suffix works)
+abs(-50) USD                 → $50            (currency too)
+```
+
 ### Structure
 
 ```
@@ -173,7 +190,7 @@ All data in `~/.config/reckn/`:
 
 Planned for future releases:
 
-- Math functions (sqrt, log, sin, cos, tan, abs, round, floor, ceil, min, max)
+- ~~Math functions~~ (added in v1.1.0)
 - Undo/redo (Ctrl+Z / Ctrl+Shift+Z)
 - Time zone conversions
 - Proportions ("3 is to 6 as what is to 10")

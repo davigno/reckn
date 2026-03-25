@@ -66,6 +66,9 @@ def _is_currency(name: str) -> bool:
 # Keywords that act as syntactic glue (dim style)
 _KEYWORD_GLUE = {"of", "off", "on", "in", "to", "as", "from", "before", "after", "timespan"}
 
+# Math function names
+_MATH_FUNCTIONS = {"sqrt", "log", "log2", "log10", "sin", "cos", "tan", "abs", "round", "floor", "ceil", "min", "max"}
+
 # SI suffixes on numbers
 _SI_SUFFIXES = set("kMGB")
 
@@ -184,6 +187,9 @@ def _classify_token(token, known_variables: Set[str]) -> str:
     """Return Rich style string for a token, or empty string for default."""
     if token.type == TokenType.IDENTIFIER:
         lower = token.value.lower()
+        # Math functions
+        if lower in _MATH_FUNCTIONS:
+            return "cyan bold"
         # Keyword glue first (of, off, on, in, to, as, from, before, after)
         if lower in _KEYWORD_GLUE:
             return "dim"
