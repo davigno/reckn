@@ -64,7 +64,10 @@ def _is_currency(name: str) -> bool:
 
 
 # Keywords that act as syntactic glue (dim style)
-_KEYWORD_GLUE = {"of", "off", "on", "in", "to", "as", "from", "before", "after", "timespan"}
+_KEYWORD_GLUE = {"of", "off", "on", "in", "to", "as", "is", "from", "before", "after", "timespan"}
+
+# Proportion unknown placeholders (highlighted distinctively)
+_PROPORTION_UNKNOWNS = {"what"}
 
 # Math function names
 _MATH_FUNCTIONS = {"sqrt", "log", "log2", "log10", "sin", "cos", "tan", "abs", "round", "floor", "ceil", "min", "max"}
@@ -190,7 +193,10 @@ def _classify_token(token, known_variables: Set[str]) -> str:
         # Math functions
         if lower in _MATH_FUNCTIONS:
             return "cyan bold"
-        # Keyword glue first (of, off, on, in, to, as, from, before, after)
+        # Proportion unknowns (what, x, ?)
+        if lower in _PROPORTION_UNKNOWNS:
+            return "bold cyan"
+        # Keyword glue (of, off, on, in, to, as, is, from, before, after)
         if lower in _KEYWORD_GLUE:
             return "dim"
         # Units and date keywords

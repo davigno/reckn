@@ -8,10 +8,12 @@ try:
     from .parser import Token, TokenType, ParseResult, Parser, expand_si_suffix, CURRENCY_SYMBOLS
     from .value import Value, Unit
     from .percentages import try_parse_percentage_expression, PercentageResult, ParsedValue
+    from .proportions import try_parse_proportion, ProportionResult
 except ImportError:
     from parser import Token, TokenType, ParseResult, Parser, expand_si_suffix, CURRENCY_SYMBOLS
     from value import Value, Unit
     from percentages import try_parse_percentage_expression, PercentageResult, ParsedValue
+    from proportions import try_parse_proportion, ProportionResult
 
 # Lazy imports to avoid circular dependencies
 _units_module = None
@@ -1209,6 +1211,20 @@ class LineEvaluator:
             # Format with percentage sign if appropriate
             if pct_result.is_percentage:
                 return f"{format_number(pct_result.value)}%"
+            return format_value(val)
+
+        # Try proportion expressions (e.g. "3 is to 6 as what is to 10")
+        prop_result = try_parse_proportion(expr_text, self._resolve_variable, self._evaluate_sub_expression)
+        if prop_result is not None:
+            val = Value(prop_result.value, prop_result.unit)
+
+            self.context.set_line_result(line_number, val)
+            if parse_result.is_assignment and parse_result.variable_name:
+                self.context.set_variable(parse_result.variable_name, val)
+
+            if isinstance(val.value, (int, float)) and not val.is_loading:
+                self._tracked_results[line_number] = val
+
             return format_value(val)
 
         # Use the new unified evaluator

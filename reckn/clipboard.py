@@ -12,6 +12,31 @@ def _has_command(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def _copy_wl(text: str) -> bool:
+    try:
+        proc = subprocess.Popen(
+            ["wl-copy"],
+            stdin=subprocess.PIPE,
+        )
+        proc.communicate(text.encode("utf-8"), timeout=2)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def _paste_wl() -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["wl-paste", "--no-newline"],
+            capture_output=True, timeout=2,
+        )
+        if result.returncode == 0:
+            return result.stdout.decode("utf-8")
+    except Exception:
+        pass
+    return None
+
+
 def _copy_xclip(text: str) -> bool:
     try:
         proc = subprocess.Popen(
@@ -82,7 +107,12 @@ def _paste_pyperclip() -> Optional[str]:
 # Detect available backend once at import time
 _backend: Optional[str] = None
 
-if _has_command("xclip"):
+import os as _os
+_is_wayland = _os.environ.get("WAYLAND_DISPLAY") or _os.environ.get("XDG_SESSION_TYPE") == "wayland"
+
+if _is_wayland and _has_command("wl-copy"):
+    _backend = "wl"
+elif _has_command("xclip"):
     _backend = "xclip"
 elif _has_command("xsel"):
     _backend = "xsel"
@@ -101,7 +131,9 @@ def is_available() -> bool:
 
 def copy(text: str) -> bool:
     """Copy text to the system clipboard. Returns True on success."""
-    if _backend == "xclip":
+    if _backend == "wl":
+        return _copy_wl(text)
+    elif _backend == "xclip":
         return _copy_xclip(text)
     elif _backend == "xsel":
         return _copy_xsel(text)
@@ -112,7 +144,9 @@ def copy(text: str) -> bool:
 
 def paste() -> Optional[str]:
     """Paste text from the system clipboard. Returns None if unavailable."""
-    if _backend == "xclip":
+    if _backend == "wl":
+        return _paste_wl()
+    elif _backend == "xclip":
         return _paste_xclip()
     elif _backend == "xsel":
         return _paste_xsel()

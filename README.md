@@ -79,6 +79,8 @@ meeting + 1 hr 45 min              4:15 pm
 |-----|--------|
 | `F1` | File menu |
 | `F2` | Help / syntax reference |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` | Redo |
 | `Ctrl+N` | New pad |
 | `Ctrl+O` | Open pad |
 | `Ctrl+S` | Save pad |
@@ -86,8 +88,7 @@ meeting + 1 hr 45 min              4:15 pm
 | `Ctrl+T` | Toggle floating total |
 | `Ctrl+K` | Toggle comment |
 | `Ctrl+X` | Delete line |
-| `Ctrl+C` | Copy result |
-| `Ctrl+Shift+C` | Copy entire pad |
+| `Ctrl+C` | Copy result to clipboard |
 | `Ctrl+V` | Paste |
 | `Ctrl+Q` | Quit |
 | `Click result` | Insert line reference |
@@ -140,6 +141,16 @@ rent * 12                    → $1,200
 50 as % of 200               → 25%
 ```
 
+### Proportions
+
+```
+3 is to 6 as what is to 10   → 5
+3 is to 6 as 9 is to what    → 18
+10 kg is to 20 kg as ? is to 50 kg → 25 kg
+```
+
+Use `what`, `x`, or `?` for the unknown. Works with units, currencies, variables, and line references.
+
 ### Dates & Clock Time
 
 ```
@@ -191,13 +202,18 @@ All data in `~/.config/reckn/`:
 Planned for future releases:
 
 - ~~Math functions~~ (added in v1.1.0)
-- Undo/redo (Ctrl+Z / Ctrl+Shift+Z)
+- ~~Proportions~~ (added in v1.2.0)
+- ~~Undo/redo~~ (added in v1.2.0)
 - Time zone conversions
-- Proportions ("3 is to 6 as what is to 10")
 - Multiple tabs/sheets
 - Export to CSV
-- Custom color themes
 - Custom user-defined units
+- **Settings menu** with:
+  - **Language** — localized keywords for all expressions (proportions, percentages, dates, time). Full i18n of the formula syntax, not just the UI chrome
+  - **Locale** — number formatting standard (decimal/thousands separators): English, European, and other common Western/Asian conventions
+  - **Themes** — custom color schemes
+  - **Pads directory** — change where pads are saved
+  - **Toggles** — show/hide floating total, show line numbers, thousands separator on/off, SI vs scientific notation for large numbers, smart spaces (auto-insert spaces around operators)
 
 ## About
 

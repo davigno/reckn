@@ -83,19 +83,15 @@ class EditorLine(Static):
         if self.has_focus:
             cursor_pos = self.cursor_pos
             result = Text()
-            # Segment before cursor
             if cursor_pos > 0:
                 result.append_text(highlighted[:cursor_pos])
-            # Cursor character with reverse style
             if cursor_pos < len(text):
                 cursor_char = highlighted[cursor_pos:cursor_pos + 1]
                 cursor_char.stylize("reverse", 0, 1)
                 result.append_text(cursor_char)
-                # Segment after cursor
                 if cursor_pos + 1 < len(text):
                     result.append_text(highlighted[cursor_pos + 1:])
             else:
-                # Cursor past end — show block cursor on empty space
                 result.append(" ", style="reverse")
             return result
 
@@ -132,7 +128,6 @@ class EditorLine(Static):
                     idx = self.line_number
                     prev_line = editor.lines[idx - 1]
                     prev_len = len(prev_line._text)
-                    # Append current line's text to previous line
                     prev_line.text = prev_line._text + self._text
                     editor.remove_line(idx)
                     editor.focus_line(idx - 1)
@@ -300,10 +295,19 @@ class Editor(Vertical):
             super().__init__()
             self.index = index
 
+    MAX_UNDO = 200
+    UNDO_DEBOUNCE_SECONDS = 1.0  # Group typing bursts into one undo step
+
     def __init__(self) -> None:
         super().__init__()
         self.lines: list[EditorLine] = []
         self.result_lines: list[ResultLine] = []
+        # Undo/redo stacks: each entry is (lines_text, cursor_line, cursor_pos)
+        self._undo_stack: list[tuple[list[str], int, int]] = []
+        self._redo_stack: list[tuple[list[str], int, int]] = []
+        self._restoring = False  # Flag to suppress snapshot during undo/redo restore
+        self._undo_timer = None  # Debounce timer for text changes
+        self._has_pending_changes = False  # Whether there are unsaved text changes
 
     def compose(self) -> ComposeResult:
         """Create initial single line row."""
@@ -318,9 +322,117 @@ class Editor(Vertical):
         if self.lines:
             self.lines[0].focus()
             self.current_line = 0
+        # Save initial state
+        self._push_snapshot()
+
+    def _get_snapshot(self) -> tuple[list[str], int, int]:
+        """Capture current editor state."""
+        texts = [line._text for line in self.lines]
+        cursor_line = self.current_line
+        cursor_pos = self.lines[cursor_line].cursor_pos if 0 <= cursor_line < len(self.lines) else 0
+        return (texts, cursor_line, cursor_pos)
+
+    def _push_snapshot(self) -> None:
+        """Push current state to undo stack unconditionally."""
+        if self._restoring:
+            return
+        snapshot = self._get_snapshot()
+        # Don't push if text is identical to top of stack
+        if self._undo_stack and self._undo_stack[-1][0] == snapshot[0]:
+            return
+        self._undo_stack.append(snapshot)
+        if len(self._undo_stack) > self.MAX_UNDO:
+            self._undo_stack.pop(0)
+        # Any new change clears redo
+        self._redo_stack.clear()
+        self._has_pending_changes = False
+
+    def _save_undo_snapshot_debounced(self) -> None:
+        """Schedule a debounced undo snapshot for text typing.
+
+        Typing creates many rapid changes. Instead of saving a snapshot per
+        keystroke, we wait for a pause in typing (UNDO_DEBOUNCE_SECONDS).
+        This groups typing bursts into one undo step.
+        """
+        if self._restoring:
+            return
+        self._has_pending_changes = True
+        # Reset the debounce timer
+        if self._undo_timer is not None:
+            self._undo_timer.stop()
+        self._undo_timer = self.set_timer(
+            self.UNDO_DEBOUNCE_SECONDS, self._flush_undo_snapshot
+        )
+
+    def _flush_undo_snapshot(self) -> None:
+        """Flush pending debounced snapshot to the undo stack."""
+        self._undo_timer = None
+        if self._has_pending_changes:
+            self._push_snapshot()
+
+    def _save_undo_snapshot_immediate(self) -> None:
+        """Save an immediate undo snapshot for structural changes.
+
+        Used for Enter (split line), Delete line, Backspace merge —
+        actions that should each be one discrete undo step.
+        Flushes any pending debounced snapshot first.
+        """
+        if self._restoring:
+            return
+        # Flush any pending typing snapshot before the structural change
+        if self._has_pending_changes:
+            if self._undo_timer is not None:
+                self._undo_timer.stop()
+                self._undo_timer = None
+            self._push_snapshot()
+
+    def undo(self) -> bool:
+        """Undo the last change. Returns True if state was restored."""
+        # Flush any pending typing changes so we capture the latest state
+        if self._has_pending_changes:
+            if self._undo_timer is not None:
+                self._undo_timer.stop()
+                self._undo_timer = None
+            self._push_snapshot()
+        if len(self._undo_stack) < 2:
+            return False
+        # Current state is top of undo stack; pop it to redo
+        current = self._undo_stack.pop()
+        self._redo_stack.append(current)
+        # Restore previous state
+        prev = self._undo_stack[-1]
+        self._restore_snapshot(prev)
+        return True
+
+    def redo(self) -> bool:
+        """Redo the last undone change. Returns True if state was restored."""
+        if not self._redo_stack:
+            return False
+        snapshot = self._redo_stack.pop()
+        self._undo_stack.append(snapshot)
+        self._restore_snapshot(snapshot)
+        return True
+
+    def _restore_snapshot(self, snapshot: tuple[list[str], int, int]) -> None:
+        """Restore editor to a saved state."""
+        texts, cursor_line, cursor_pos = snapshot
+        self._restoring = True
+        try:
+            self.set_all_text(texts)
+            cursor_line = min(cursor_line, len(self.lines) - 1)
+            self.focus_line(cursor_line)
+            self.lines[cursor_line].cursor_pos = min(cursor_pos, len(self.lines[cursor_line]._text))
+            self.lines[cursor_line].refresh()
+        finally:
+            self._restoring = False
+
+    def on_editor_line_text_changed(self, message: EditorLine.TextChanged) -> None:
+        """Debounced undo snapshot for text typing."""
+        self._save_undo_snapshot_debounced()
 
     def add_line(self, after_index: int = -1, text: str = "", notify: bool = True) -> bool:
         """Add a new line after the given index. Returns True if added."""
+        self._save_undo_snapshot_immediate()
         if len(self.lines) >= self.MAX_LINES:
             return False
         if after_index < 0:
@@ -343,10 +455,12 @@ class Editor(Vertical):
             self.mount(row)
         if notify:
             self.post_message(self.LineAdded())
+        self._push_snapshot()
         return True
 
     def remove_line(self, index: int, notify: bool = True) -> bool:
         """Remove the line at index. Returns True if removed."""
+        self._save_undo_snapshot_immediate()
         if len(self.lines) <= 1 or index < 0 or index >= len(self.lines):
             return False
         editor_line = self.lines.pop(index)
@@ -363,6 +477,7 @@ class Editor(Vertical):
             self.result_lines[i].line_number = i
         if notify:
             self.post_message(self.LineRemoved(index))
+        self._push_snapshot()
         return True
 
     def focus_line(self, line_index: int) -> None:
@@ -418,18 +533,23 @@ class Editor(Vertical):
 
     def set_all_text(self, texts: list[str]) -> None:
         """Set text for all lines, growing/shrinking as needed."""
-        # Ensure we have enough lines (don't notify - caller should sync)
-        while len(self.lines) < len(texts) and len(self.lines) < self.MAX_LINES:
-            self.add_line(notify=False)
-        # Remove excess lines
-        while len(self.lines) > max(len(texts), 1):
-            self.remove_line(len(self.lines) - 1, notify=False)
-        # Set the text
-        for i, line in enumerate(self.lines):
-            if i < len(texts):
-                line.set_text_no_notify(texts[i])
-            else:
-                line.set_text_no_notify("")
+        was_restoring = self._restoring
+        self._restoring = True
+        try:
+            # Ensure we have enough lines (don't notify - caller should sync)
+            while len(self.lines) < len(texts) and len(self.lines) < self.MAX_LINES:
+                self.add_line(notify=False)
+            # Remove excess lines
+            while len(self.lines) > max(len(texts), 1):
+                self.remove_line(len(self.lines) - 1, notify=False)
+            # Set the text
+            for i, line in enumerate(self.lines):
+                if i < len(texts):
+                    line.set_text_no_notify(texts[i])
+                else:
+                    line.set_text_no_notify("")
+        finally:
+            self._restoring = was_restoring
 
     def set_result(self, line_index: int, result: str,
                    is_heading: bool = False, is_comment: bool = False,
@@ -437,6 +557,12 @@ class Editor(Vertical):
         """Set the result for a specific line."""
         if 0 <= line_index < len(self.result_lines):
             self.result_lines[line_index].set_result(result, is_heading, is_comment, is_subtotal)
+
+    def reset_undo(self) -> None:
+        """Reset undo/redo stacks (e.g. after loading a new pad)."""
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._save_undo_snapshot()
 
     def clear(self) -> None:
         """Clear all lines (keep just one empty line)."""
@@ -528,26 +654,32 @@ class MenuBar(Static):
         pass
 
     def render(self) -> Text:
+        # Layout: " File │ Help              Reckn"
         text = Text()
-        text.append("Reckn", style="bold")
-        text.append(" \u2502 ", style="dim")
         text.append("F", style="underline bold")
-        text.append("ile ", style="bold")
-        text.append("F1", style="dim")
+        text.append("ile", style="bold")
         text.append(" \u2502 ", style="dim")
         text.append("H", style="underline bold")
-        text.append("elp ", style="bold")
-        text.append("F2", style="dim")
+        text.append("elp", style="bold")
+        # Push "Reckn" to the right
+        left_len = len("File \u2502 Help")
+        label = "Reckn"
+        available = self.size.width - left_len - len(label) - 2  # 2 for padding
+        if available > 0:
+            text.append(" " * available)
+        text.append(label, style="bold")
         return text
 
     def on_click(self, event: events.Click) -> None:
-        # Layout: " Reckn │ File F1 │ Help F2"
-        # Reckn region: x < 7, File region: 7-17, Help region: >= 18
-        if event.x < 7:
+        # Layout: " File │ Help              Reckn"
+        # File region: x < 6, Help region: 6-12, Reckn region: far right
+        x = event.x
+        width = self.size.width
+        if x >= width - 7:
             self.post_message(self.AboutClicked())
-        elif event.x < 18:
+        elif x < 6:
             self.post_message(self.FileClicked())
-        else:
+        elif x < 13:
             self.post_message(self.HelpClicked())
 
 
@@ -603,7 +735,7 @@ class FileMenuScreen(ModalScreen[str]):
         height: auto;
         background: $surface;
         border: solid $primary;
-        margin: 1 0 0 8;
+        margin: 1 0 0 1;
     }
     """
 
@@ -762,10 +894,11 @@ class HelpScreen(ModalScreen[str]):
         shortcut("Ctrl+S", "Save pad")
         shortcut("Ctrl+E", "Export as markdown")
         shortcut("Ctrl+T", "Toggle floating total")
+        shortcut("Ctrl+Z", "Undo")
+        shortcut("Ctrl+Y", "Redo")
         shortcut("Ctrl+K", "Toggle comment")
         shortcut("Ctrl+X", "Delete line")
         shortcut("Ctrl+C", "Copy result to clipboard")
-        shortcut("Ctrl+Shift+C", "Copy entire pad")
         shortcut("Ctrl+V", "Paste from clipboard")
         shortcut("Ctrl+Q", "Quit")
         shortcut("F1", "File menu")
@@ -820,6 +953,12 @@ class HelpScreen(ModalScreen[str]):
         example("now + 2 hours", "(2 hours from now)")
         example("3:35pm - 11:00am", "4 hr 35 min")
         example("5.5 hours as timespan", "5 hr 30 min")
+
+        heading("PROPORTIONS")
+        example("3 is to 6 as what is to 10", "5")
+        example("3 is to 6 as 9 is to what", "18")
+        example("10 kg is to 20 kg as ? is to 50 kg", "25 kg")
+        note("Use what, x, or ? for the unknown")
 
         heading("MATH FUNCTIONS")
         example("sqrt(144)", "12")
@@ -1212,11 +1351,13 @@ class RecknApp(App):
         Binding("ctrl+t", "toggle_total", "Toggle Total"),
         Binding("ctrl+k", "toggle_comment", "Comment", show=False),
         Binding("ctrl+x", "delete_line", "Delete Line", show=False),
-        Binding("ctrl+c", "copy_result", "Copy Result", show=False, priority=True),
-        Binding("ctrl+shift+c", "copy_all", "Copy All", show=False),
+        Binding("ctrl+c", "copy", "Copy", show=False, priority=True),
         Binding("alt+f", "toggle_file_menu", "File Menu", show=False, priority=True),
         Binding("f1", "toggle_file_menu", "File Menu", show=False),
         Binding("f2", "toggle_help", "Help", show=False),
+        Binding("ctrl+z", "undo", "Undo", show=False),
+        Binding("ctrl+shift+z", "redo", "Redo", show=False),
+        Binding("ctrl+y", "redo", "Redo", show=False),
     ]
 
     def __init__(self, pad_name: str | None = None) -> None:
@@ -1321,6 +1462,7 @@ class RecknApp(App):
 
             self._do_evaluation()
             editor.focus_line(0)
+            editor.reset_undo()
         else:
             # Pad doesn't exist - create new with this name
             status_bar = self.query_one(StatusBar)
@@ -1369,6 +1511,18 @@ class RecknApp(App):
                 line.text = "// " + line._text
             self._schedule_evaluation()
 
+    def action_undo(self) -> None:
+        """Undo the last change."""
+        editor = self.query_one(Editor)
+        if editor.undo():
+            self._schedule_evaluation()
+
+    def action_redo(self) -> None:
+        """Redo the last undone change."""
+        editor = self.query_one(Editor)
+        if editor.redo():
+            self._schedule_evaluation()
+
     def action_delete_line(self) -> None:
         """Delete the current line."""
         editor = self.query_one(Editor)
@@ -1391,7 +1545,7 @@ class RecknApp(App):
             self.notify("Install xclip for clipboard support", severity="warning")
         return False
 
-    def action_copy_result(self) -> None:
+    def action_copy(self) -> None:
         """Copy the current line's result to the system clipboard."""
         if not self._check_clipboard():
             return
@@ -1404,22 +1558,6 @@ class RecknApp(App):
                 self.notify("Result copied")
             else:
                 self.notify("No result to copy", severity="warning")
-
-    def action_copy_all(self) -> None:
-        """Copy the entire pad (expressions + results, tab-separated) to clipboard."""
-        if not self._check_clipboard():
-            return
-        editor = self.query_one(Editor)
-        lines = editor.get_all_text()
-        output = []
-        for i, line_text in enumerate(lines):
-            result = editor.result_lines[i]._result if i < len(editor.result_lines) else ""
-            if result:
-                output.append(f"{line_text}\t{result}")
-            else:
-                output.append(line_text)
-        clipboard.copy("\n".join(output))
-        self.notify("Pad copied to clipboard")
 
     def _schedule_evaluation(self) -> None:
         """Schedule evaluation with debouncing."""
@@ -1541,6 +1679,7 @@ class RecknApp(App):
 
             self._do_evaluation()
             editor.focus_line(0)
+            editor.reset_undo()
             self.notify(f"Opened: {pad.name}")
         else:
             self.notify("Failed to open pad", severity="error")
@@ -1573,6 +1712,7 @@ class RecknApp(App):
         status_bar.is_modified = False
 
         editor.focus_line(0)
+        editor.reset_undo()
         self.notify("New pad created")
 
     def action_toggle_total(self) -> None:

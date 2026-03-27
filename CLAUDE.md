@@ -37,6 +37,7 @@ reckn/
     ├── units.py           # Unit definitions, conversion logic, rate formation
     ├── currencies.py      # Currency fetching, caching, symbol mapping
     ├── percentages.py     # Percentage expression patterns
+    ├── proportions.py     # Proportion expressions (A is to B as X is to D)
     ├── dates.py           # Date/calendar math, clock time, timespan support
     ├── highlighter.py     # Syntax highlighting for editor lines (Rich Text)
     ├── clipboard.py       # System clipboard (xclip/xsel/pyperclip fallback)
@@ -205,23 +206,21 @@ Input Line
 | Timespan formatting (5.5 hours as timespan) | ✅ | dates.py, evaluator.py |
 | Clock time variables and line references | ✅ | dates.py, evaluator.py |
 | Copy result to clipboard (Ctrl+C) | ✅ | clipboard.py, app.py |
-| Copy entire pad to clipboard (Ctrl+Shift+C) | ✅ | clipboard.py, app.py |
 | Paste from clipboard (Ctrl+V) | ✅ | clipboard.py, app.py |
 | CLI with argparse (reckn, reckn name, --list) | ✅ | __main__.py |
 | Number formatting (thousands, decimals, scientific) | ✅ | evaluator.py |
+| Proportions (3 is to 6 as what is to 10) | ✅ | proportions.py |
+| Undo/redo (Ctrl+Z / Ctrl+Y) | ✅ | app.py (Editor) |
 
 ## Phase 2 Features (Not Yet Implemented)
 
 From SPEC.md - these are future enhancements:
 
 - Time zone conversions
-- Proportions ("3 is to 6 as what is to 10")
-- Math functions (sqrt, log, sin, cos, tan, abs, min, max, round, floor, ceil)
-- Undo/redo (Ctrl+Z / Ctrl+Shift+Z)
 - Multiple tabs/sheets
 - Export to CSV
-- Custom color themes
 - Custom user-defined units
+- Settings menu (language/i18n, locale/number formatting, themes, pads directory, display toggles)
 
 ## Testing
 
@@ -275,10 +274,6 @@ No pytest suite yet. Testing is done via:
 1. **Rate updates:** Rates are cached for the session. Restart app for fresh rates.
 
 2. **Limited symbols:** Only common symbols ($, €, £, ¥, R$, A$, C$, etc.) are recognized. Others must use ISO codes.
-
-### UI Limitations
-
-1. **No selection:** Can't select text with Shift+arrows (Textual limitation).
 
 ## Code Style Notes
 
