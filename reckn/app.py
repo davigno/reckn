@@ -1,8 +1,9 @@
 """Textual UI for Reckn calculator notepad."""
 
+from dataclasses import dataclass, field
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll, Center, Middle
-from textual.widgets import Static, Button, Input, Label, ListItem, ListView
+from textual.widgets import Static, Button, Input, Label, ListItem, ListView, Checkbox
 from textual.screen import ModalScreen
 from textual.binding import Binding
 from textual.reactive import reactive
@@ -24,9 +25,6 @@ class EditorLine(Static):
         height: auto;
         width: 2fr;
         padding: 0 1;
-    }
-    EditorLine:focus {
-        background: $surface-lighten-1;
     }
     """
 
@@ -298,8 +296,9 @@ class Editor(Vertical):
     MAX_UNDO = 200
     UNDO_DEBOUNCE_SECONDS = 1.0  # Group typing bursts into one undo step
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, initial_lines: list[str] | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._initial_lines = initial_lines or [""]
         self.lines: list[EditorLine] = []
         self.result_lines: list[ResultLine] = []
         # Undo/redo stacks: each entry is (lines_text, cursor_line, cursor_pos)
@@ -310,12 +309,13 @@ class Editor(Vertical):
         self._has_pending_changes = False  # Whether there are unsaved text changes
 
     def compose(self) -> ComposeResult:
-        """Create initial single line row."""
-        editor_line = EditorLine("", line_number=0)
-        result_line = ResultLine(line_number=0)
-        self.lines.append(editor_line)
-        self.result_lines.append(result_line)
-        yield LineRow(editor_line, result_line)
+        """Create initial line rows from initial_lines."""
+        for i, text in enumerate(self._initial_lines):
+            editor_line = EditorLine(text, line_number=i)
+            result_line = ResultLine(line_number=i)
+            self.lines.append(editor_line)
+            self.result_lines.append(result_line)
+            yield LineRow(editor_line, result_line)
 
     def on_mount(self) -> None:
         """Focus the first line on mount."""
@@ -562,7 +562,7 @@ class Editor(Vertical):
         """Reset undo/redo stacks (e.g. after loading a new pad)."""
         self._undo_stack.clear()
         self._redo_stack.clear()
-        self._save_undo_snapshot()
+        self._push_snapshot()
 
     def clear(self) -> None:
         """Clear all lines (keep just one empty line)."""
@@ -607,21 +607,16 @@ class StatusBar(Static):
         self.refresh()
 
     def render(self) -> Text:
-        """Render the status bar with pad name left-aligned and total right-aligned."""
+        """Render the status bar with total right-aligned."""
         text = Text()
-        pad_display = self.pad_name
-        if self.is_modified:
-            pad_display = f"*{pad_display}"
-        text.append(f"Pad: {pad_display}", style="italic")
 
         if self.is_offline:
-            text.append("  [offline]", style="bold red")
+            text.append("[offline]", style="bold red")
 
         # Build total text on the right
         if self.total_visible and self._totals:
             from .evaluator import format_total_values
             total_str = f"Total: {format_total_values(self._totals)}"
-            # Pad with spaces to push total to the right
             available = self.size.width - len(text.plain) - len(total_str)
             if available > 0:
                 text.append(" " * available)
@@ -632,6 +627,104 @@ class StatusBar(Static):
         return text
 
 
+@dataclass
+class TabState:
+    """State for a single tab."""
+    tab_id: int
+    editor: object  # Editor instance (forward reference)
+    pad: Pad | None = None
+    is_modified: bool = False
+    display_name: str = ""
+
+
+class TabBar(Static):
+    """Tab bar showing open pads."""
+
+    DEFAULT_CSS = """
+    TabBar {
+        height: 1;
+        width: 100%;
+        background: $surface;
+        padding: 0 0 0 0;
+    }
+    """
+
+    class TabClicked(Message):
+        def __init__(self, tab_index: int) -> None:
+            super().__init__()
+            self.tab_index = tab_index
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._tabs: list[tuple[str, bool]] = []  # (name, is_modified)
+        self._active: int = 0
+
+    def set_tabs(self, tabs: list[tuple[str, bool]], active: int) -> None:
+        self._tabs = tabs
+        self._active = active
+        self.refresh()
+
+    def render(self) -> Text:
+        text = Text()
+        width = self.size.width - 1  # Available width (minus padding)
+
+        # Build all labels to measure total length
+        labels = []
+        for i, (name, modified) in enumerate(self._tabs):
+            mod = "*" if modified else ""
+            label = f" {mod}{name} "
+            sep = "│" if i < len(self._tabs) - 1 else ""
+            labels.append((label, sep))
+
+        # Calculate total length
+        total_len = sum(len(l) + len(s) for l, s in labels)
+
+        # If overflow, scroll to keep active tab visible
+        start_idx = 0
+        if total_len > width and len(labels) > 1:
+            # Find the start index that keeps active tab visible
+            # Show as many tabs as fit, centered on active
+            start_idx = max(0, self._active - 1)
+            while start_idx > 0:
+                visible_len = sum(len(l) + len(s) for l, s in labels[start_idx:])
+                if visible_len <= width:
+                    break
+                start_idx += 1
+            if start_idx > 0:
+                text.append("◂ ", style="dim")
+
+        for i in range(start_idx, len(labels)):
+            label, sep = labels[i]
+            # Check if adding this label would overflow
+            remaining = width - len(text.plain)
+            if remaining < len(label) + 2 and i > self._active:
+                text.append(" ▸", style="dim")
+                break
+            if i == self._active:
+                # label is " name " or " *name " — strip spaces for underline
+                inner = label.strip()
+                text.append(" ", style="")
+                text.append(inner, style="bold white underline")
+                text.append(" ", style="")
+            else:
+                text.append(label, style="dim")
+            if sep:
+                text.append(sep, style="dim")
+        return text
+
+    def on_click(self, event: events.Click) -> None:
+        x = event.x
+        pos = 0
+        for i, (name, modified) in enumerate(self._tabs):
+            mod = "*" if modified else ""
+            label_len = len(f" {mod}{name} ")
+            sep_len = 1 if i < len(self._tabs) - 1 else 0
+            if x < pos + label_len + sep_len:
+                self.post_message(self.TabClicked(i))
+                return
+            pos += label_len + sep_len
+
+
 class MenuBar(Static):
     """Menu bar at the top of the application."""
 
@@ -639,7 +732,7 @@ class MenuBar(Static):
     MenuBar {
         height: 1;
         width: 100%;
-        background: $primary;
+        background: $surface-lighten-1;
         padding: 0 1;
     }
     """
@@ -749,8 +842,9 @@ class FileMenuScreen(ModalScreen[str]):
         self._highlighted = 0
         total_label = "Hide Total" if total_visible else "Show Total"
         self._menu_items = [
-            ("New", "Ctrl+N", "new_pad"),
+            ("New Tab", "Ctrl+N", "new_pad"),
             ("Open", "Ctrl+O", "open_pad"),
+            ("Close Tab", "Ctrl+W", "close_tab"),
             ("Save", "Ctrl+S", "save"),
             ("Export", "Ctrl+E", "export"),
             (total_label, "Ctrl+T", "toggle_total"),
@@ -888,10 +982,15 @@ class HelpScreen(ModalScreen[str]):
         def note(s: str) -> None:
             t.append(f"  {s}\n", style="dim italic")
 
+        heading("TABS")
+        shortcut("Ctrl+N", "New tab")
+        shortcut("Ctrl+O", "Open pad in new tab")
+        shortcut("Ctrl+W", "Close current tab")
+        shortcut("Tab", "Next tab")
+        shortcut("Click tab", "Switch to tab")
+
         heading("KEYBOARD SHORTCUTS")
-        shortcut("Ctrl+N", "New pad")
-        shortcut("Ctrl+O", "Open pad")
-        shortcut("Ctrl+S", "Save pad")
+        shortcut("Ctrl+S", "Save current tab")
         shortcut("Ctrl+E", "Export as markdown")
         shortcut("Ctrl+T", "Toggle floating total")
         shortcut("Ctrl+Z", "Undo")
@@ -1338,6 +1437,58 @@ class ExportScreen(ModalScreen[str]):
         self.dismiss("")
 
 
+class QuitScreen(ModalScreen[list[int] | None]):
+    """Quit dialog with checklist of unsaved tabs to save."""
+
+    DEFAULT_CSS = """
+    QuitScreen { align: center middle; }
+    #quit-dialog {
+        width: 50;
+        height: auto;
+        max-height: 80%;
+        border: thick $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    #quit-dialog Label { width: 100%; padding-bottom: 1; }
+    .quit-checkbox { padding: 0 2; }
+    #quit-buttons { width: 100%; height: auto; align: center middle; padding-top: 1; }
+    #quit-buttons Button { margin: 0 1; }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, unsaved_tabs: list[tuple[int, str]]) -> None:
+        super().__init__()
+        self._unsaved_tabs = unsaved_tabs
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="quit-dialog"):
+            yield Label("Unsaved Changes")
+            for idx, name in self._unsaved_tabs:
+                yield Checkbox(name, value=True, id=f"quit-cb-{idx}", classes="quit-checkbox")
+            with Horizontal(id="quit-buttons"):
+                yield Button("Save & Quit", variant="primary", id="save-quit-btn")
+                yield Button("Quit", variant="warning", id="quit-btn")
+                yield Button("Cancel", id="cancel-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save-quit-btn":
+            to_save = []
+            for idx, name in self._unsaved_tabs:
+                cb = self.query_one(f"#quit-cb-{idx}", Checkbox)
+                if cb.value:
+                    to_save.append(idx)
+            self.dismiss(to_save)
+        elif event.button.id == "quit-btn":
+            self.dismiss([])
+        elif event.button.id == "cancel-btn":
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class RecknApp(App):
     """The main Reckn application."""
 
@@ -1355,12 +1506,14 @@ class RecknApp(App):
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+s", "save", "Save"),
         Binding("ctrl+o", "open_pad", "Open"),
-        Binding("ctrl+n", "new_pad", "New"),
+        Binding("ctrl+n", "new_pad", "New Tab"),
         Binding("ctrl+e", "export", "Export"),
         Binding("ctrl+t", "toggle_total", "Toggle Total"),
         Binding("ctrl+k", "toggle_comment", "Comment", show=False),
         Binding("ctrl+x", "delete_line", "Delete Line", show=False),
         Binding("ctrl+c", "copy", "Copy", show=False, priority=True),
+        Binding("ctrl+w", "close_tab", "Close Tab", show=False),
+        Binding("tab", "next_tab", "Next Tab", show=False, priority=True),
         Binding("alt+f", "toggle_file_menu", "File Menu", show=False, priority=True),
         Binding("f1", "toggle_file_menu", "File Menu", show=False),
         Binding("f2", "toggle_help", "Help", show=False),
@@ -1373,121 +1526,240 @@ class RecknApp(App):
         super().__init__()
         self.evaluator = LineEvaluator()
         self._eval_pending = False
-        self.current_pad: Pad | None = None
         self._initial_pad_name = pad_name
         self._clipboard_warned = False
+        # Tab state
+        self.tabs: list[TabState] = []
+        self._active_tab_index: int = 0
+        self._next_tab_id: int = 1
+        self._new_pad_counter: int = 1
+        self._quit_save_queue: list[int] = []
+
+    @property
+    def active_tab(self) -> TabState:
+        return self.tabs[self._active_tab_index]
+
+    @property
+    def active_editor(self) -> Editor:
+        return self.active_tab.editor
 
     def compose(self) -> ComposeResult:
         """Compose the UI."""
+        initial_editor = Editor(id="editor-1")
         yield MenuBar()
         with Vertical(id="main-container"):
-            yield Editor()
+            yield initial_editor
         yield StatusBar()
+        yield TabBar()
 
     def on_mount(self) -> None:
         """Set up the app on mount."""
         self.title = "Reckn"
         self.sub_title = "Calculator Notepad"
 
+        # Create initial tab from the editor created in compose
+        editor = self.query_one("#editor-1", Editor)
+        tab = TabState(
+            tab_id=1,
+            editor=editor,
+            display_name=f"new pad {self._new_pad_counter}",
+        )
+        self.tabs.append(tab)
+        self._next_tab_id = 2
+        self._new_pad_counter = 2
+
         # Load initial pad if specified
         if self._initial_pad_name:
             self._load_pad_by_name(self._initial_pad_name)
 
-        # Start background currency fetch
+        self._refresh_tab_bar()
+        self._refresh_status_bar()
         self._start_currency_fetch()
 
+    # --- Tab management ---
+
+    def _refresh_tab_bar(self) -> None:
+        try:
+            tab_bar = self.query_one(TabBar)
+            tab_data = [(t.display_name, t.is_modified) for t in self.tabs]
+            tab_bar.set_tabs(tab_data, self._active_tab_index)
+        except Exception:
+            pass
+
+    def _refresh_status_bar(self) -> None:
+        try:
+            status_bar = self.query_one(StatusBar)
+            tab = self.active_tab
+            status_bar.pad_name = tab.display_name
+            status_bar.is_modified = tab.is_modified
+        except Exception:
+            pass
+
+    def _switch_to_tab(self, index: int) -> None:
+        if index < 0 or index >= len(self.tabs) or index == self._active_tab_index:
+            return
+        self.active_tab.editor.display = False
+        self._active_tab_index = index
+        self.active_tab.editor.display = True
+        self.active_tab.editor.focus_line(self.active_tab.editor.current_line)
+        self._refresh_tab_bar()
+        self._refresh_status_bar()
+        self._do_evaluation()
+
+    def _create_tab(self, pad: Pad | None = None) -> TabState:
+        tab_id = self._next_tab_id
+        self._next_tab_id += 1
+
+        lines = pad.lines if pad and pad.lines else None
+        editor = Editor(initial_lines=lines, id=f"editor-{tab_id}")
+
+        container = self.query_one("#main-container", Vertical)
+        container.mount(editor)
+        editor.display = False
+
+        if pad:
+            display_name = pad.name
+        else:
+            display_name = f"new pad {self._new_pad_counter}"
+            self._new_pad_counter += 1
+
+        tab = TabState(
+            tab_id=tab_id,
+            editor=editor,
+            pad=pad,
+            is_modified=False,
+            display_name=display_name,
+        )
+        self.tabs.append(tab)
+        self._switch_to_tab(len(self.tabs) - 1)
+
+        if pad:
+            def _init():
+                editor.reset_undo()
+                self._do_evaluation()
+            self.set_timer(0.05, _init)
+
+        return tab
+
+    def _close_tab(self, index: int) -> None:
+        if len(self.tabs) <= 1:
+            # Last tab — clear it instead of closing
+            tab = self.tabs[0]
+            tab.editor.clear()
+            tab.pad = None
+            tab.is_modified = False
+            tab.display_name = f"new pad {self._new_pad_counter}"
+            self._new_pad_counter += 1
+            tab.editor.reset_undo()
+            self._refresh_tab_bar()
+            self._refresh_status_bar()
+            self._do_evaluation()
+            return
+
+        tab = self.tabs[index]
+        tab.editor.remove()
+        self.tabs.pop(index)
+
+        if self._active_tab_index >= len(self.tabs):
+            self._active_tab_index = len(self.tabs) - 1
+        elif self._active_tab_index > index:
+            self._active_tab_index -= 1
+
+        self.active_tab.editor.display = True
+        self._refresh_tab_bar()
+        self._refresh_status_bar()
+        self._do_evaluation()
+        self.active_editor.focus_line(self.active_editor.current_line)
+
+    def _find_editor_ancestor(self, widget) -> Editor | None:
+        """Walk up the widget tree to find the Editor ancestor."""
+        node = widget.parent if hasattr(widget, 'parent') else None
+        while node and not isinstance(node, Editor):
+            node = node.parent
+        return node if isinstance(node, Editor) else None
+
+    def _is_from_active_editor(self, message) -> bool:
+        """Check if a message originates from the active editor."""
+        # For messages from EditorLine or ResultLine, walk up to find Editor
+        sender = getattr(message, '_sender', None)
+        if sender is None:
+            return True  # Can't determine, assume active
+        editor = self._find_editor_ancestor(sender)
+        return editor is self.active_editor
+
+    # --- Currency ---
+
     def _start_currency_fetch(self) -> None:
-        """Kick off background currency rate fetch if no rates cached."""
         from .currencies import get_converter
         converter = get_converter()
         if not converter.rates:
             converter.fetch_rates_in_background(on_complete=self._on_currency_loaded)
 
     def _on_currency_loaded(self, success: bool) -> None:
-        """Called from background thread when currency fetch completes."""
         self.call_from_thread(self._handle_currency_loaded, success)
 
     def _handle_currency_loaded(self, success: bool) -> None:
-        """Handle currency load result on the main thread."""
         if not success:
             from .currencies import get_converter
             converter = get_converter()
             if not converter.rates:
-                status_bar = self.query_one(StatusBar)
-                status_bar.is_offline = True
-        # Re-evaluate all lines with fresh/cached rates
+                try:
+                    self.query_one(StatusBar).is_offline = True
+                except Exception:
+                    pass
         self._do_evaluation()
 
+    # --- Menu bar handlers ---
+
     def on_menu_bar_about_clicked(self, message: MenuBar.AboutClicked) -> None:
-        """Handle click on Reckn in the menu bar."""
         self.push_screen(AboutScreen(), lambda _: None)
 
     def on_menu_bar_file_clicked(self, message: MenuBar.FileClicked) -> None:
-        """Handle click on File in the menu bar."""
         self.action_toggle_file_menu()
 
     def on_menu_bar_help_clicked(self, message: MenuBar.HelpClicked) -> None:
-        """Handle click on Help in the menu bar."""
         self.action_toggle_help()
 
+    def on_tab_bar_tab_clicked(self, message: TabBar.TabClicked) -> None:
+        self._switch_to_tab(message.tab_index)
+
     def action_toggle_help(self) -> None:
-        """Toggle the help screen."""
         if isinstance(self.screen, HelpScreen):
             self.screen.dismiss("")
             return
         self.push_screen(HelpScreen(), lambda _: None)
 
     def action_toggle_file_menu(self) -> None:
-        """Toggle the file menu dropdown open/closed."""
         if isinstance(self.screen, FileMenuScreen):
             self.screen.dismiss("")
             return
         try:
-            status_bar = self.query_one(StatusBar)
-            total_visible = status_bar.total_visible
+            total_visible = self.query_one(StatusBar).total_visible
         except Exception:
             total_visible = True
         self.push_screen(FileMenuScreen(total_visible), self._handle_file_menu)
 
     def _handle_file_menu(self, action: str) -> None:
-        """Handle file menu selection."""
         if not action:
             return
         action_method = getattr(self, f"action_{action}", None)
         if action_method:
             action_method()
 
-    def _load_pad_by_name(self, name: str) -> None:
-        """Load a pad by name."""
-        pad = load_pad(name)
-        if pad:
-            self.current_pad = pad
-            editor = self.query_one(Editor)
-            editor.set_all_text(pad.lines if pad.lines else [""])
-
-            status_bar = self.query_one(StatusBar)
-            status_bar.pad_name = pad.name
-            status_bar.is_modified = False
-
-            self._do_evaluation()
-            editor.focus_line(0)
-            editor.reset_undo()
-        else:
-            # Pad doesn't exist - create new with this name
-            status_bar = self.query_one(StatusBar)
-            status_bar.pad_name = name
-            status_bar.is_modified = False
-            self.current_pad = Pad.new(name)
+    # --- Editor event handlers (with message origin filtering) ---
 
     def on_editor_line_text_changed(self, message: EditorLine.TextChanged) -> None:
-        """Handle text changes in editor lines."""
-        status_bar = self.query_one(StatusBar)
-        status_bar.is_modified = True
+        if not self._is_from_active_editor(message):
+            return
+        self.active_tab.is_modified = True
+        self._refresh_tab_bar()
+        self._refresh_status_bar()
         self._schedule_evaluation()
 
     def on_result_line_clicked(self, message: ResultLine.Clicked) -> None:
-        """Handle click on a result line - insert line reference."""
-        editor = self.query_one(Editor)
+        if not self._is_from_active_editor(message):
+            return
+        editor = self.active_editor
         current_line_idx = editor.current_line
         if 0 <= current_line_idx < len(editor.lines):
             current_line = editor.lines[current_line_idx]
@@ -1496,57 +1768,49 @@ class RecknApp(App):
             self._schedule_evaluation()
 
     def on_editor_line_added(self, message: Editor.LineAdded) -> None:
-        """Handle line added in editor."""
+        if not self._is_from_active_editor(message):
+            return
         self._schedule_evaluation()
 
     def on_editor_line_removed(self, message: Editor.LineRemoved) -> None:
-        """Handle line removed in editor."""
+        if not self._is_from_active_editor(message):
+            return
         self._schedule_evaluation()
 
+    # --- Editor actions ---
+
     def action_toggle_comment(self) -> None:
-        """Toggle comment on current line."""
-        editor = self.query_one(Editor)
+        editor = self.active_editor
         if editor.current_line < len(editor.lines):
             line = editor.lines[editor.current_line]
             text = line._text.strip()
             if text.startswith("// "):
-                # Remove comment
                 line.text = line._text.replace("// ", "", 1)
             elif text.startswith("//"):
-                # Remove comment (no space)
                 line.text = line._text.replace("//", "", 1)
             else:
-                # Add comment
                 line.text = "// " + line._text
             self._schedule_evaluation()
 
     def action_undo(self) -> None:
-        """Undo the last change."""
-        editor = self.query_one(Editor)
-        if editor.undo():
+        if self.active_editor.undo():
             self._schedule_evaluation()
 
     def action_redo(self) -> None:
-        """Redo the last undone change."""
-        editor = self.query_one(Editor)
-        if editor.redo():
+        if self.active_editor.redo():
             self._schedule_evaluation()
 
     def action_delete_line(self) -> None:
-        """Delete the current line."""
-        editor = self.query_one(Editor)
+        editor = self.active_editor
         current = editor.current_line
         if editor.remove_line(current):
-            # Focus the previous line or stay at 0
             new_focus = max(0, current - 1) if current > 0 else 0
             editor.focus_line(new_focus)
         elif len(editor.lines) == 1:
-            # Only one line left - clear it instead of removing
             editor.lines[0].text = ""
             editor.lines[0].cursor_pos = 0
 
     def _check_clipboard(self) -> bool:
-        """Check clipboard availability, show one-time warning if missing."""
         if clipboard.is_available():
             return True
         if not self._clipboard_warned:
@@ -1555,10 +1819,9 @@ class RecknApp(App):
         return False
 
     def action_copy(self) -> None:
-        """Copy the current line's result to the system clipboard."""
         if not self._check_clipboard():
             return
-        editor = self.query_one(Editor)
+        editor = self.active_editor
         idx = editor.current_line
         if 0 <= idx < len(editor.result_lines):
             result = editor.result_lines[idx]._result
@@ -1568,17 +1831,16 @@ class RecknApp(App):
             else:
                 self.notify("No result to copy", severity="warning")
 
+    # --- Evaluation ---
+
     def _schedule_evaluation(self) -> None:
-        """Schedule evaluation with debouncing."""
         if not self._eval_pending:
             self._eval_pending = True
             self.set_timer(0.1, self._do_evaluation)
 
     def _do_evaluation(self) -> None:
-        """Perform evaluation of all lines."""
         self._eval_pending = False
-
-        editor = self.query_one(Editor)
+        editor = self.active_editor
 
         lines = editor.get_all_text()
         self.evaluator = LineEvaluator()
@@ -1591,141 +1853,172 @@ class RecknApp(App):
             is_subtotal = self.evaluator.is_subtotal_line(i + 1)
             editor.set_result(i, result, is_heading, is_comment, is_subtotal)
 
-        # Update floating total in status bar
         try:
-            status_bar = self.query_one(StatusBar)
-            status_bar.totals = self.evaluator.get_floating_totals()
+            self.query_one(StatusBar).totals = self.evaluator.get_floating_totals()
         except Exception:
             pass
 
-        # Update syntax highlighting with known variables
         known_vars = set(self.evaluator.context.variables.keys())
         editor.update_known_variables(known_vars)
 
-    def action_quit(self) -> None:
-        """Quit the application."""
-        status_bar = self.query_one(StatusBar)
-        if status_bar.is_modified:
+    # --- Tab navigation ---
+
+    def action_next_tab(self) -> None:
+        if len(self.tabs) > 1:
+            next_idx = (self._active_tab_index + 1) % len(self.tabs)
+            self._switch_to_tab(next_idx)
+
+    def action_close_tab(self) -> None:
+        tab = self.active_tab
+        if tab.is_modified:
             self.push_screen(
-                ConfirmScreen("You have unsaved changes. Quit anyway?"),
-                self._handle_quit_confirm
+                ConfirmScreen(f"'{tab.display_name}' has unsaved changes. Close anyway?"),
+                self._handle_close_tab_confirm
             )
         else:
-            self.exit()
+            self._close_tab(self._active_tab_index)
 
-    def _handle_quit_confirm(self, confirmed: bool) -> None:
+    def _handle_close_tab_confirm(self, confirmed: bool) -> None:
         if confirmed:
+            self._close_tab(self._active_tab_index)
+
+    # --- Quit ---
+
+    def action_quit(self) -> None:
+        unsaved = [(i, t.display_name) for i, t in enumerate(self.tabs) if t.is_modified]
+        if not unsaved:
             self.exit()
+            return
+        self.push_screen(QuitScreen(unsaved), self._handle_quit)
+
+    def _handle_quit(self, result: list[int] | None) -> None:
+        if result is None:
+            return
+        if not result:
+            self.exit()
+            return
+        self._quit_save_queue = list(result)
+        self._process_quit_save_queue()
+
+    def _process_quit_save_queue(self) -> None:
+        if not self._quit_save_queue:
+            self.exit()
+            return
+        idx = self._quit_save_queue.pop(0)
+        if idx >= len(self.tabs):
+            self._process_quit_save_queue()
+            return
+        tab = self.tabs[idx]
+        if tab.pad and tab.pad.name:
+            tab.pad.lines = tab.editor.get_all_text()
+            try:
+                save_pad(tab.pad)
+            except Exception:
+                pass
+            self._process_quit_save_queue()
+        else:
+            self._switch_to_tab(idx)
+            self.push_screen(SaveScreen(tab.display_name), self._handle_quit_save_name)
+
+    def _handle_quit_save_name(self, name: str) -> None:
+        if name:
+            tab = self.active_tab
+            lines = tab.editor.get_all_text()
+            while lines and not lines[-1].strip():
+                lines.pop()
+            tab.pad = Pad.new(name)
+            tab.pad.lines = lines
+            try:
+                save_pad(tab.pad)
+            except Exception:
+                pass
+        self._process_quit_save_queue()
+
+    # --- Save ---
 
     def action_save(self) -> None:
-        """Save the current pad."""
-        status_bar = self.query_one(StatusBar)
-        current_name = status_bar.pad_name
-
-        self.push_screen(SaveScreen(current_name), self._handle_save)
+        tab = self.active_tab
+        self.push_screen(SaveScreen(tab.display_name), self._handle_save)
 
     def _handle_save(self, name: str) -> None:
         if not name:
             return
-
-        editor = self.query_one(Editor)
-        lines = editor.get_all_text()
-
-        # Remove trailing empty lines for cleaner save
+        tab = self.active_tab
+        lines = tab.editor.get_all_text()
         while lines and not lines[-1].strip():
             lines.pop()
 
-        if self.current_pad:
-            self.current_pad.name = name
-            self.current_pad.lines = lines
+        if tab.pad:
+            tab.pad.name = name
+            tab.pad.lines = lines
         else:
-            self.current_pad = Pad.new(name)
-            self.current_pad.lines = lines
+            tab.pad = Pad.new(name)
+            tab.pad.lines = lines
 
         try:
-            path = save_pad(self.current_pad)
-            status_bar = self.query_one(StatusBar)
-            status_bar.pad_name = name
-            status_bar.is_modified = False
+            path = save_pad(tab.pad)
+            tab.display_name = name
+            tab.is_modified = False
+            self._refresh_tab_bar()
+            self._refresh_status_bar()
             self.notify(f"Saved to {path.name}")
         except Exception as e:
             self.notify(f"Error saving: {e}", severity="error")
 
+    # --- Open ---
+
     def action_open_pad(self) -> None:
-        """Open a saved pad."""
-        status_bar = self.query_one(StatusBar)
-
-        if status_bar.is_modified:
-            self.push_screen(
-                ConfirmScreen("You have unsaved changes. Discard them?"),
-                self._handle_open_confirm
-            )
-        else:
-            self.push_screen(OpenScreen(), self._handle_open)
-
-    def _handle_open_confirm(self, confirmed: bool) -> None:
-        if confirmed:
-            self.push_screen(OpenScreen(), self._handle_open)
+        if len(self.tabs) >= 9:
+            self.notify("Maximum 9 tabs", severity="warning")
+            return
+        self.push_screen(OpenScreen(), self._handle_open)
 
     def _handle_open(self, path_str: str) -> None:
         if not path_str:
             return
-
         from pathlib import Path
-        path = Path(path_str)
-        pad = load_pad_from_path(path)
-
+        pad = load_pad_from_path(Path(path_str))
         if pad:
-            self.current_pad = pad
-            editor = self.query_one(Editor)
-
-            # Set text (this will grow/shrink the editor)
-            editor.set_all_text(pad.lines if pad.lines else [""])
-
-            status_bar = self.query_one(StatusBar)
-            status_bar.pad_name = pad.name
-            status_bar.is_modified = False
-
-            self._do_evaluation()
-            editor.focus_line(0)
-            editor.reset_undo()
+            # Check if already open
+            for i, tab in enumerate(self.tabs):
+                if tab.pad and tab.pad.name == pad.name:
+                    self._switch_to_tab(i)
+                    self.notify(f"Switched to: {pad.name}")
+                    return
+            self._create_tab(pad=pad)
             self.notify(f"Opened: {pad.name}")
         else:
             self.notify("Failed to open pad", severity="error")
 
+    # --- New tab ---
+
     def action_new_pad(self) -> None:
-        """Create a new empty pad."""
-        status_bar = self.query_one(StatusBar)
+        if len(self.tabs) >= 9:
+            self.notify("Maximum 9 tabs", severity="warning")
+            return
+        self._create_tab()
 
-        if status_bar.is_modified:
-            self.push_screen(
-                ConfirmScreen("You have unsaved changes. Discard them?"),
-                self._handle_new_confirm
-            )
+    # --- Load pad by name (CLI argument) ---
+
+    def _load_pad_by_name(self, name: str) -> None:
+        pad = load_pad(name)
+        if pad:
+            tab = self.active_tab
+            tab.pad = pad
+            tab.display_name = pad.name
+            tab.editor.set_all_text(pad.lines if pad.lines else [""])
+            tab.is_modified = False
+            tab.editor.reset_undo()
+            self._do_evaluation()
+            tab.editor.focus_line(0)
         else:
-            self._do_new_pad()
+            tab = self.active_tab
+            tab.display_name = name
+            tab.pad = Pad.new(name)
 
-    def _handle_new_confirm(self, confirmed: bool) -> None:
-        if confirmed:
-            self._do_new_pad()
-
-    def _do_new_pad(self) -> None:
-        """Actually create a new pad."""
-        self.current_pad = None
-
-        editor = self.query_one(Editor)
-        editor.clear()
-
-        status_bar = self.query_one(StatusBar)
-        status_bar.pad_name = "*new*"
-        status_bar.is_modified = False
-
-        editor.focus_line(0)
-        editor.reset_undo()
-        self.notify("New pad created")
+    # --- Toggle total ---
 
     def action_toggle_total(self) -> None:
-        """Toggle the floating total display."""
         try:
             status_bar = self.query_one(StatusBar)
             status_bar.total_visible = not status_bar.total_visible
@@ -1736,31 +2029,24 @@ class RecknApp(App):
         except Exception:
             pass
 
-    def action_export(self) -> None:
-        """Export the current pad as markdown."""
-        status_bar = self.query_one(StatusBar)
-        default_name = status_bar.pad_name
-        if default_name == "*new*":
-            default_name = "export"
-        # Clean up name for filename
-        default_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in default_name)
+    # --- Export ---
 
+    def action_export(self) -> None:
+        tab = self.active_tab
+        default_name = tab.display_name
+        if default_name.startswith("new pad"):
+            default_name = "export"
+        default_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in default_name)
         self.push_screen(ExportScreen(default_name), self._handle_export)
 
     def _handle_export(self, path_str: str) -> None:
         if not path_str:
             return
-
         from pathlib import Path
         path = Path(path_str).expanduser()
-
-        # Ensure .md extension
         if not path.suffix:
             path = path.with_suffix(".md")
-
-        # Create parent directory if needed
         path.parent.mkdir(parents=True, exist_ok=True)
-
         try:
             markdown = self._generate_export_markdown()
             path.write_text(markdown)
@@ -1769,64 +2055,47 @@ class RecknApp(App):
             self.notify(f"Export failed: {e}", severity="error")
 
     def _generate_export_markdown(self) -> str:
-        """Generate markdown export of current pad."""
-        editor = self.query_one(Editor)
-
+        editor = self.active_editor
         lines = editor.get_all_text()
         results = [rl._result for rl in editor.result_lines]
-
         output_parts: list[str] = []
         table_rows: list[tuple[str, str]] = []
 
         def flush_table() -> None:
-            """Write accumulated table rows to output."""
             nonlocal table_rows
             if table_rows:
                 output_parts.append("| Expression | Result |")
                 output_parts.append("|---|---|")
                 for expr, result in table_rows:
-                    # Escape pipe characters in expressions and results
                     expr_escaped = expr.replace("|", "\\|")
                     result_escaped = result.replace("|", "\\|")
                     output_parts.append(f"| {expr_escaped} | {result_escaped} |")
-                output_parts.append("")  # Blank line after table
+                output_parts.append("")
                 table_rows = []
 
         for i, line_text in enumerate(lines):
             stripped = line_text.strip()
             result = results[i] if i < len(results) else ""
-
             if not stripped:
-                # Empty line - flush current table and add separator
                 flush_table()
                 continue
-
             if stripped.startswith("#"):
-                # Heading - flush table, then output heading
                 flush_table()
                 output_parts.append(stripped)
                 output_parts.append("")
                 continue
-
             if stripped.startswith("//"):
-                # Comment - flush table, output as paragraph
                 flush_table()
                 comment_text = stripped[2:].strip()
                 if comment_text:
                     output_parts.append(comment_text)
                     output_parts.append("")
                 continue
-
-            # Regular expression line - add to table
             table_rows.append((stripped, result))
 
-        # Flush any remaining table rows
         flush_table()
-
-        # Remove trailing empty lines
         while output_parts and not output_parts[-1]:
             output_parts.pop()
-
         return "\n".join(output_parts) + "\n"
 
 
