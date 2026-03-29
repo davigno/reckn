@@ -954,6 +954,15 @@ class HelpScreen(ModalScreen[str]):
         example("3:35pm - 11:00am", "4 hr 35 min")
         example("5.5 hours as timespan", "5 hr 30 min")
 
+        heading("TIMEZONES")
+        example("now in Tokyo", "(current time in Tokyo)")
+        example("3:30pm CET in PST", "6:30 am PST")
+        example("meeting = 2pm EST", "2:00 pm EST")
+        example("meeting in CET", "8:00 pm CET")
+        example("time difference between CET and PST", "9 hr")
+        example("Tokyo vs New_York", "13 hr")
+        note("City names or abbreviations, case-insensitive")
+
         heading("PROPORTIONS")
         example("3 is to 6 as what is to 10", "5")
         example("3 is to 6 as 9 is to what", "18")

@@ -64,7 +64,8 @@ def _is_currency(name: str) -> bool:
 
 
 # Keywords that act as syntactic glue (dim style)
-_KEYWORD_GLUE = {"of", "off", "on", "in", "to", "as", "is", "from", "before", "after", "timespan"}
+_KEYWORD_GLUE = {"of", "off", "on", "in", "to", "as", "is", "from", "before", "after", "timespan",
+                  "time", "difference", "between", "and", "vs"}
 
 # Proportion unknown placeholders (highlighted distinctively)
 _PROPORTION_UNKNOWNS = {"what"}

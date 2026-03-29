@@ -38,6 +38,7 @@ reckn/
     ├── currencies.py      # Currency fetching, caching, symbol mapping
     ├── percentages.py     # Percentage expression patterns
     ├── proportions.py     # Proportion expressions (A is to B as X is to D)
+    ├── timezones.py       # Timezone data, lookups, conversion (zoneinfo)
     ├── dates.py           # Date/calendar math, clock time, timespan support
     ├── highlighter.py     # Syntax highlighting for editor lines (Rich Text)
     ├── clipboard.py       # System clipboard (xclip/xsel/pyperclip fallback)
@@ -211,13 +212,14 @@ Input Line
 | Number formatting (thousands, decimals, scientific) | ✅ | evaluator.py |
 | Proportions (3 is to 6 as what is to 10) | ✅ | proportions.py |
 | Undo/redo (Ctrl+Z / Ctrl+Y) | ✅ | app.py (Editor) |
+| Timezone conversions (now in Tokyo, CET - PST) | ✅ | timezones.py, dates.py |
 
 ## Phase 2 Features (Not Yet Implemented)
 
 From SPEC.md - these are future enhancements:
 
-- Time zone conversions
 - Multiple tabs/sheets
+- Sectioned help screen (navigable tabs/sections — help is getting long)
 - Export to CSV
 - Custom user-defined units
 - Settings menu (language/i18n, locale/number formatting, themes, pads directory, display toggles)

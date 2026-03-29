@@ -77,10 +77,21 @@ class DateResult:
     is_date: bool = True  # True for date, False for interval
 
 
+def _get_timezones():
+    """Lazy import to avoid circular dependencies."""
+    try:
+        from . import timezones
+    except ImportError:
+        import timezones
+    return timezones
+
+
 def is_date_reserved_word(name: str) -> bool:
-    """Check if a name is a date-related reserved word (keyword or month name)."""
+    """Check if a name is a date-related reserved word (keyword, month, or timezone)."""
     lower = name.lower()
-    return lower in DATE_KEYWORDS or lower in MONTH_NAMES
+    if lower in DATE_KEYWORDS or lower in MONTH_NAMES:
+        return True
+    return _get_timezones().is_known_timezone(name)
 
 
 def resolve_date_keyword(keyword: str) -> date:
@@ -505,9 +516,11 @@ def _try_duration_before(expr: str, resolve_var: Optional[Callable]) -> Optional
 
 @dataclass
 class ClockTime:
-    """A time of day (0:00 to 23:59)."""
+    """A time of day (0:00 to 23:59), optionally with timezone."""
     hour: int   # 0-23
     minute: int  # 0-59
+    tz_name: str | None = None    # IANA timezone ID (e.g., "America/New_York")
+    tz_label: str | None = None   # Display label (e.g., "EST", "Tokyo", "CST (US Central)")
 
     def total_minutes(self) -> int:
         """Total minutes since midnight."""
@@ -519,7 +532,8 @@ class ClockTime:
         return NotImplemented
 
     def __repr__(self) -> str:
-        return f"ClockTime({self.hour}:{self.minute:02d})"
+        tz = f" {self.tz_label}" if self.tz_label else ""
+        return f"ClockTime({self.hour}:{self.minute:02d}{tz})"
 
 
 @dataclass
@@ -550,11 +564,11 @@ def parse_clock_time(text: str) -> Optional[ClockTime]:
     if text.lower() == "now":
         return resolve_now_time()
 
-    # 12-hour format: 7:45am, 7:45 am, 12:00pm
-    m = re.match(r'^(\d{1,2}):(\d{2})\s*(am|pm)$', text, re.IGNORECASE)
+    # 12-hour format: 7:45am, 7:45 am, 12:00pm, 2pm, 2 pm
+    m = re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$', text, re.IGNORECASE)
     if m:
         hour = int(m.group(1))
-        minute = int(m.group(2))
+        minute = int(m.group(2)) if m.group(2) else 0
         period = m.group(3).lower()
         if hour < 1 or hour > 12 or minute > 59:
             return None
@@ -579,15 +593,27 @@ def parse_clock_time(text: str) -> Optional[ClockTime]:
 
 
 def format_clock_time(ct: ClockTime) -> str:
-    """Format a clock time for display: '7:45 am', '3:35 pm'."""
+    """Format a clock time for display: '7:45 am', '3:35 pm EST', '2:30 pm (Tokyo)'."""
     if ct.hour == 0:
-        return f"12:{ct.minute:02d} am"
+        base = f"12:{ct.minute:02d} am"
     elif ct.hour < 12:
-        return f"{ct.hour}:{ct.minute:02d} am"
+        base = f"{ct.hour}:{ct.minute:02d} am"
     elif ct.hour == 12:
-        return f"12:{ct.minute:02d} pm"
+        base = f"12:{ct.minute:02d} pm"
     else:
-        return f"{ct.hour - 12}:{ct.minute:02d} pm"
+        base = f"{ct.hour - 12}:{ct.minute:02d} pm"
+
+    if ct.tz_label:
+        label = ct.tz_label
+        # Already contains parens (e.g., "CST (US Central)") — use as-is
+        if "(" in label:
+            return f"{base} {label}"
+        # Pure uppercase abbreviation — no wrapping
+        if label.isupper() and " " not in label:
+            return f"{base} {label}"
+        # City name or other — wrap in parens
+        return f"{base} ({label})"
+    return base
 
 
 def clock_time_add_minutes(ct: ClockTime, minutes: int) -> ClockTime:
@@ -616,7 +642,9 @@ def format_timespan(total_seconds: float) -> str:
     - 5400 → "1 hr 30 min"
     - 302400 → "3 days 12 hr"
     - 90 → "1 min 30 sec"
+    - -3600 → "-1 hr"
     """
+    sign = "-" if total_seconds < 0 else ""
     total_seconds = abs(total_seconds)
 
     days = int(total_seconds // 86400)
@@ -639,7 +667,7 @@ def format_timespan(total_seconds: float) -> str:
     if not parts:
         parts.append("0 min")
 
-    return " ".join(parts)
+    return sign + " ".join(parts)
 
 
 def _parse_time_duration_minutes(text: str) -> Optional[int]:
@@ -702,6 +730,24 @@ def try_parse_clock_time_expression(
     if result is not None:
         return result
 
+    # Timezone patterns (before time arithmetic to catch "CET - PST")
+    tz_mod = _get_timezones()
+
+    # Pattern: "CET - PST", "Tokyo - New_York" (timezone offset difference)
+    result = _try_tz_difference(expr, tz_mod)
+    if result is not None:
+        return result
+
+    # Pattern: "3:30pm CET in PST" (time with source tz converted to target tz)
+    result = _try_time_tz_conversion(expr, resolve_var, tz_mod)
+    if result is not None:
+        return result
+
+    # Pattern: "now in Tokyo", "3:30pm in EST" (time converted to target tz)
+    result = _try_time_in_tz(expr, resolve_var, tz_mod)
+    if result is not None:
+        return result
+
     # Pattern: "<time> +/- <hours/minutes duration>"
     result = _try_time_plus_duration(expr, resolve_var)
     if result is not None:
@@ -712,6 +758,11 @@ def try_parse_clock_time_expression(
     if result is not None:
         return result
 
+    # Pattern: "2pm EST", "now JST" (standalone time with timezone label)
+    result = _try_standalone_time_with_tz(expr, resolve_var, tz_mod)
+    if result is not None:
+        return result
+
     # Standalone clock time (only if no operators present, except inside the time itself)
     if not re.search(r'[+\-*/^=]', expr):
         ct = _resolve_clock_time_or_var(expr, resolve_var)
@@ -719,6 +770,103 @@ def try_parse_clock_time_expression(
             return ClockTimeResult(value=ct, result_type="clock_time")
 
     return None
+
+
+def _try_tz_difference(expr: str, tz_mod) -> Optional[ClockTimeResult]:
+    """Parse timezone offset difference.
+
+    Patterns:
+    - time difference between Rome and Istanbul
+    - Rome vs Istanbul
+    - CET - PST
+    """
+    # "time difference between X and Y"
+    m = re.match(r'^time\s+difference\s+between\s+(\w+)\s+and\s+(\w+)$', expr, re.IGNORECASE)
+    if not m:
+        # "X vs Y"
+        m = re.match(r'^(\w+)\s+vs\s+(\w+)$', expr, re.IGNORECASE)
+    if not m:
+        # "X - Y" (both must be timezone names)
+        m = re.match(r'^(\w+)\s*-\s*(\w+)$', expr)
+    if not m:
+        return None
+
+    left_name = m.group(1).strip()
+    right_name = m.group(2).strip()
+
+    left_tz = tz_mod.resolve_timezone(left_name)
+    right_tz = tz_mod.resolve_timezone(right_name)
+    if left_tz is None or right_tz is None:
+        return None
+
+    diff_hours = tz_mod.timezone_offset_hours(left_tz[0], right_tz[0])
+    return ClockTimeResult(value=float(diff_hours * 3600), result_type="timespan")
+
+
+def _try_time_tz_conversion(expr: str, resolve_var: Optional[Callable], tz_mod) -> Optional[ClockTimeResult]:
+    """Parse: 3:30pm CET in PST, now EST in Tokyo."""
+    m = re.match(r'^(.+?)\s+(\w+)\s+in\s+(\w+)$', expr, re.IGNORECASE)
+    if not m:
+        return None
+    time_part = m.group(1).strip()
+    source_name = m.group(2).strip()
+    target_name = m.group(3).strip()
+
+    source_tz = tz_mod.resolve_timezone(source_name)
+    target_tz = tz_mod.resolve_timezone(target_name)
+    if source_tz is None or target_tz is None:
+        return None
+
+    ct = _resolve_clock_time_or_var(time_part, resolve_var)
+    if ct is None:
+        return None
+
+    h, m_min = tz_mod.convert_clock_time(ct.hour, ct.minute, source_tz[0], target_tz[0])
+    result = ClockTime(hour=h, minute=m_min, tz_name=target_tz[0], tz_label=target_tz[1])
+    return ClockTimeResult(value=result, result_type="clock_time")
+
+
+def _try_time_in_tz(expr: str, resolve_var: Optional[Callable], tz_mod) -> Optional[ClockTimeResult]:
+    """Parse: now in Tokyo, 3:30pm in EST, meeting in CET."""
+    m = re.match(r'^(.+?)\s+in\s+(\w+)$', expr, re.IGNORECASE)
+    if not m:
+        return None
+    time_part = m.group(1).strip()
+    target_name = m.group(2).strip()
+
+    target_tz = tz_mod.resolve_timezone(target_name)
+    if target_tz is None:
+        return None
+
+    ct = _resolve_clock_time_or_var(time_part, resolve_var)
+    if ct is None:
+        return None
+
+    # Use source timezone if the clock time has one, otherwise local
+    source_iana = ct.tz_name
+    h, m_min = tz_mod.convert_clock_time(ct.hour, ct.minute, source_iana, target_tz[0])
+    result = ClockTime(hour=h, minute=m_min, tz_name=target_tz[0], tz_label=target_tz[1])
+    return ClockTimeResult(value=result, result_type="clock_time")
+
+
+def _try_standalone_time_with_tz(expr: str, resolve_var: Optional[Callable], tz_mod) -> Optional[ClockTimeResult]:
+    """Parse: 2pm EST, now JST — clock time with timezone label (no conversion)."""
+    m = re.match(r'^(.+?)\s+(\w+)$', expr)
+    if not m:
+        return None
+    time_part = m.group(1).strip()
+    tz_name = m.group(2).strip()
+
+    tz_info = tz_mod.resolve_timezone(tz_name)
+    if tz_info is None:
+        return None
+
+    ct = _resolve_clock_time_or_var(time_part, resolve_var)
+    if ct is None:
+        return None
+
+    result = ClockTime(hour=ct.hour, minute=ct.minute, tz_name=tz_info[0], tz_label=tz_info[1])
+    return ClockTimeResult(value=result, result_type="clock_time")
 
 
 def _try_time_plus_duration(expr: str, resolve_var: Optional[Callable]) -> Optional[ClockTimeResult]:

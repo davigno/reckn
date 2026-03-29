@@ -68,9 +68,11 @@ today                              25 March 2026
 vacation = June 15                 15 June 2026
 vacation - today                   2 months 21 days
 
-# Time
-meeting = 2:30pm                   2:30 pm
-meeting + 1 hr 45 min              4:15 pm
+# Time & Timezones
+meeting = 2:30pm EST               2:30 pm EST
+meeting in CET                     8:30 pm CET
+now in Tokyo                       2:45 am (Tokyo)
+time difference between CET and PST    9 hr
 ```
 
 ## Keyboard Shortcuts
@@ -162,6 +164,20 @@ from March 1 to April 1      → 1 month
 5.5 hours as timespan        → 5 hr 30 min
 ```
 
+### Timezones
+
+```
+now in Tokyo                 → 2:45 am (Tokyo)
+now in EST                   → 1:45 pm EST
+3:30pm CET in PST            → 6:30 am PST
+meeting = 2pm EST            → 2:00 pm EST
+meeting in CET               → 8:00 pm CET
+time difference between CET and PST → 9 hr
+Tokyo vs New_York            → 13 hr
+```
+
+Use city names or abbreviations (case-insensitive). Ambiguous abbreviations show the default: `CST (US Central)`.
+
 ### Math Functions
 
 ```
@@ -204,7 +220,7 @@ Planned for future releases:
 - ~~Math functions~~ (added in v1.1.0)
 - ~~Proportions~~ (added in v1.2.0)
 - ~~Undo/redo~~ (added in v1.2.0)
-- Time zone conversions
+- ~~Time zone conversions~~ (added in v1.3.0)
 - Multiple tabs/sheets
 - Export to CSV
 - Custom user-defined units
