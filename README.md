@@ -221,15 +221,12 @@ Planned for future releases:
 - ~~Proportions~~ (added in v1.2.0)
 - ~~Undo/redo~~ (added in v1.2.0)
 - ~~Time zone conversions~~ (added in v1.3.0)
-- Multiple tabs/sheets
-- Export to CSV
-- Custom user-defined units
-- **Settings menu** with:
-  - **Language** — localized keywords for all expressions (proportions, percentages, dates, time). Full i18n of the formula syntax, not just the UI chrome
-  - **Locale** — number formatting standard (decimal/thousands separators): English, European, and other common Western/Asian conventions
-  - **Themes** — custom color schemes
-  - **Pads directory** — change where pads are saved
-  - **Toggles** — show/hide floating total, show line numbers, thousands separator on/off, SI vs scientific notation for large numbers, smart spaces (auto-insert spaces around operators)
+- ~~Multiple tabs~~ (added in v1.4.0)
+- ~~Settings menu with themes~~ (added in v1.5.0)
+- Sectioned help screen
+- Language (i18n) — localized formula keywords (EN, IT, ES, FR, PT, DE)
+- Locale — number formatting (decimal/thousands separators)
+- Additional display toggles (line numbers, smart spaces, etc.)
 
 ## About
 

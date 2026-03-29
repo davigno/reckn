@@ -202,10 +202,10 @@ def _classify_token(token, known_variables: Set[str]) -> str:
             return "dim"
         # Units and date keywords
         if _is_unit(token.value):
-            return "#ff69b4"
+            return "magenta"
         # Currency codes (USD, EUR, etc.)
         if _is_currency(token.value):
-            return "#ff69b4"
+            return "magenta"
         # Variable references
         if lower in known_variables:
             return "green"
@@ -215,7 +215,7 @@ def _classify_token(token, known_variables: Set[str]) -> str:
         return "cyan"
 
     if token.type == TokenType.CURRENCY_SYMBOL:
-        return "#ff69b4"
+        return "magenta"
 
     # NUMBER, OPERATOR, LPAREN, RPAREN, EQUALS — default
     return ""

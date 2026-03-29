@@ -14,7 +14,9 @@ from rich.text import Text
 from .evaluator import LineEvaluator
 from .pad import Pad, save_pad, load_pad, load_pad_from_path, list_pads
 from .highlighter import highlight_line
+from .settings import Settings, load_settings, save_settings
 from . import clipboard
+from . import pad as pad_module
 
 
 class EditorLine(Static):
@@ -275,6 +277,7 @@ class Editor(Vertical):
         width: 100%;
         height: 100%;
         border: solid $primary;
+        background: $surface-darken-3;
         padding: 0;
         overflow-y: auto;
     }
@@ -582,7 +585,6 @@ class StatusBar(Static):
     StatusBar {
         height: 1;
         width: 100%;
-        background: $surface;
         color: $text-muted;
         padding: 0 1;
     }
@@ -644,7 +646,6 @@ class TabBar(Static):
     TabBar {
         height: 1;
         width: 100%;
-        background: $surface;
         padding: 0 0 0 0;
     }
     """
@@ -704,7 +705,7 @@ class TabBar(Static):
                 # label is " name " or " *name " — strip spaces for underline
                 inner = label.strip()
                 text.append(" ", style="")
-                text.append(inner, style="bold white underline")
+                text.append(inner, style="bold underline")
                 text.append(" ", style="")
             else:
                 text.append(label, style="dim")
@@ -732,7 +733,6 @@ class MenuBar(Static):
     MenuBar {
         height: 1;
         width: 100%;
-        background: $surface-lighten-1;
         padding: 0 1;
     }
     """
@@ -743,36 +743,40 @@ class MenuBar(Static):
     class FileClicked(Message):
         pass
 
+    class SettingsClicked(Message):
+        pass
+
     class HelpClicked(Message):
         pass
 
     def render(self) -> Text:
-        # Layout: " File │ Help              Reckn"
+        # Layout: " File │ Settings │ Help              Reckn"
         text = Text()
-        text.append("F", style="underline bold")
-        text.append("ile", style="bold")
+        text.append("File", style="bold")
         text.append(" \u2502 ", style="dim")
-        text.append("H", style="underline bold")
-        text.append("elp", style="bold")
-        # Push "Reckn" to the right
-        left_len = len("File \u2502 Help")
+        text.append("Settings", style="bold")
+        text.append(" \u2502 ", style="dim")
+        text.append("Help", style="bold")
+        left_len = len("File \u2502 Settings \u2502 Help")
         label = "Reckn"
-        available = self.size.width - left_len - len(label) - 2  # 2 for padding
+        available = self.size.width - left_len - len(label) - 2
         if available > 0:
             text.append(" " * available)
         text.append(label, style="bold")
         return text
 
     def on_click(self, event: events.Click) -> None:
-        # Layout: " File │ Help              Reckn"
-        # File region: x < 6, Help region: 6-12, Reckn region: far right
+        # Layout: " File │ Settings │ Help              Reckn"
+        # File: x < 6, Settings: 6-18, Help: 18-24, Reckn: far right
         x = event.x
         width = self.size.width
         if x >= width - 7:
             self.post_message(self.AboutClicked())
         elif x < 6:
             self.post_message(self.FileClicked())
-        elif x < 13:
+        elif x < 18:
+            self.post_message(self.SettingsClicked())
+        elif x < 24:
             self.post_message(self.HelpClicked())
 
 
@@ -790,6 +794,8 @@ class FileMenuItem(Static):
     }
     FileMenuItem.highlighted {
         background: $primary;
+        color: auto;
+        text-style: bold;
     }
     """
 
@@ -837,17 +843,15 @@ class FileMenuScreen(ModalScreen[str]):
         Binding("f1", "close", "Close"),
     ]
 
-    def __init__(self, total_visible: bool = True) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self._highlighted = 0
-        total_label = "Hide Total" if total_visible else "Show Total"
         self._menu_items = [
             ("New Tab", "Ctrl+N", "new_pad"),
             ("Open", "Ctrl+O", "open_pad"),
             ("Close Tab", "Ctrl+W", "close_tab"),
             ("Save", "Ctrl+S", "save"),
             ("Export", "Ctrl+E", "export"),
-            (total_label, "Ctrl+T", "toggle_total"),
             ("Quit", "Ctrl+Q", "quit"),
         ]
 
@@ -937,7 +941,7 @@ class AboutScreen(ModalScreen[str]):
 
 
 class HelpScreen(ModalScreen[str]):
-    """Help screen with keyboard shortcuts and syntax reference."""
+    """Help screen with keyboard shortcuts and syntax reference (F3)."""
 
     DEFAULT_CSS = """
     HelpScreen {
@@ -958,7 +962,7 @@ class HelpScreen(ModalScreen[str]):
 
     BINDINGS = [
         Binding("escape", "close", "Close"),
-        Binding("f2", "close", "Close"),
+        Binding("f3", "close", "Close"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -1001,7 +1005,8 @@ class HelpScreen(ModalScreen[str]):
         shortcut("Ctrl+V", "Paste from clipboard")
         shortcut("Ctrl+Q", "Quit")
         shortcut("F1", "File menu")
-        shortcut("F2", "This help screen")
+        shortcut("F2", "Settings")
+        shortcut("F3", "This help screen")
         shortcut("Click result", "Insert line reference")
 
         heading("STRUCTURE")
@@ -1091,6 +1096,175 @@ class HelpScreen(ModalScreen[str]):
     def on_click(self, event: events.Click) -> None:
         # Only close if clicking outside the help container
         pass
+
+
+class ThemePickerScreen(ModalScreen[str]):
+    """Theme selection screen."""
+
+    DEFAULT_CSS = """
+    ThemePickerScreen { align: center middle; }
+    #theme-dialog {
+        width: 40;
+        height: 80%;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #theme-dialog Label { width: 100%; padding-bottom: 1; }
+    #theme-list { height: 1fr; }
+    #theme-buttons { width: 100%; height: auto; align: center middle; padding-top: 1; }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, current_theme: str) -> None:
+        super().__init__()
+        self._current = current_theme
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="theme-dialog"):
+            yield Label("Select Theme")
+            with ListView(id="theme-list"):
+                for name in sorted(self.app.available_themes):
+                    marker = " \u2713" if name == self._current else ""
+                    yield ListItem(Static(f"{name}{marker}"), id=f"theme-{name}")
+            with Horizontal(id="theme-buttons"):
+                yield Button("Cancel", id="cancel-btn")
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.item and event.item.id:
+            theme_name = event.item.id.replace("theme-", "", 1)
+            self.app.theme = theme_name
+            self._current = theme_name
+
+    def action_cancel(self) -> None:
+        self.dismiss(self._current)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(self._current)
+
+
+class SettingsMenuScreen(ModalScreen[str]):
+    """Dropdown settings menu, same style as FileMenuScreen."""
+
+    DEFAULT_CSS = """
+    SettingsMenuScreen {
+        align: left top;
+        background: transparent;
+    }
+    #settings-menu-box {
+        width: 32;
+        height: auto;
+        background: $surface;
+        border: solid $primary;
+        margin: 1 0 0 8;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("f2", "close", "Close"),
+    ]
+
+    def __init__(self, current_theme: str, show_totals: bool) -> None:
+        super().__init__()
+        self._highlighted = 0
+        total_label = "Hide Total" if show_totals else "Show Total"
+        self._menu_items = [
+            (f"Theme: {current_theme}", "", "pick_theme"),
+            ("Pads directory", "", "pick_pads_dir"),
+            (total_label, "Ctrl+T", "toggle_total"),
+        ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="settings-menu-box"):
+            for label, shortcut, action in self._menu_items:
+                yield FileMenuItem(label, shortcut, action)
+
+    def on_mount(self) -> None:
+        self._update_highlight()
+
+    def _update_highlight(self) -> None:
+        for i, item in enumerate(self.query(FileMenuItem)):
+            item.set_class(i == self._highlighted, "highlighted")
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "up":
+            self._highlighted = (self._highlighted - 1) % len(self._menu_items)
+            self._update_highlight()
+            event.stop()
+        elif event.key == "down":
+            self._highlighted = (self._highlighted + 1) % len(self._menu_items)
+            self._update_highlight()
+            event.stop()
+        elif event.key == "enter":
+            action = self._menu_items[self._highlighted][2]
+            self.dismiss(action)
+            event.stop()
+
+    def action_close(self) -> None:
+        self.dismiss("")
+
+    def on_file_menu_item_clicked(self, message: FileMenuItem.Clicked) -> None:
+        self.dismiss(message.action)
+
+    def on_click(self, event: events.Click) -> None:
+        self.dismiss("")
+
+
+class PadsDirectoryScreen(ModalScreen[str]):
+    """Screen to change pads directory."""
+
+    DEFAULT_CSS = """
+    PadsDirectoryScreen { align: center middle; }
+    #pads-dir-dialog {
+        width: 60;
+        height: auto;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #pads-dir-dialog Label { width: 100%; padding-bottom: 1; }
+    #pads-dir-buttons { width: 100%; height: auto; align: center middle; padding-top: 1; }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, current_dir: str) -> None:
+        super().__init__()
+        self._current_dir = current_dir
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="pads-dir-dialog"):
+            yield Label("Pads Directory")
+            yield Input(
+                value=self._current_dir,
+                placeholder="Enter directory path...",
+                id="pads-dir-input"
+            )
+            with Horizontal(id="pads-dir-buttons"):
+                yield Button("Save", variant="primary", id="save-btn")
+                yield Button("Cancel", id="cancel-btn")
+
+    def on_mount(self) -> None:
+        self.query_one("#pads-dir-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save-btn":
+            path = self.query_one("#pads-dir-input", Input).value.strip()
+            if path:
+                self.dismiss(path)
+            else:
+                self.dismiss("")
+        elif event.button.id == "cancel-btn":
+            self.dismiss("")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        path = event.value.strip()
+        self.dismiss(path if path else "")
+
+    def action_cancel(self) -> None:
+        self.dismiss("")
 
 
 class SaveScreen(ModalScreen[str]):
@@ -1516,7 +1690,9 @@ class RecknApp(App):
         Binding("tab", "next_tab", "Next Tab", show=False, priority=True),
         Binding("alt+f", "toggle_file_menu", "File Menu", show=False, priority=True),
         Binding("f1", "toggle_file_menu", "File Menu", show=False),
-        Binding("f2", "toggle_help", "Help", show=False),
+        Binding("f2", "toggle_settings", "Settings", show=False),
+        Binding("f3", "toggle_help", "Help", show=False),
+        Binding("f10", "show_about", show=False),
         Binding("ctrl+z", "undo", "Undo", show=False),
         Binding("ctrl+shift+z", "redo", "Redo", show=False),
         Binding("ctrl+y", "redo", "Redo", show=False),
@@ -1528,6 +1704,7 @@ class RecknApp(App):
         self._eval_pending = False
         self._initial_pad_name = pad_name
         self._clipboard_warned = False
+        self._settings = load_settings()
         # Tab state
         self.tabs: list[TabState] = []
         self._active_tab_index: int = 0
@@ -1568,6 +1745,12 @@ class RecknApp(App):
         self._next_tab_id = 2
         self._new_pad_counter = 2
 
+        # Register custom themes
+        self._register_custom_themes()
+
+        # Apply settings
+        self._apply_settings()
+
         # Load initial pad if specified
         if self._initial_pad_name:
             self._load_pad_by_name(self._initial_pad_name)
@@ -1575,6 +1758,35 @@ class RecknApp(App):
         self._refresh_tab_bar()
         self._refresh_status_bar()
         self._start_currency_fetch()
+
+    def _register_custom_themes(self) -> None:
+        """Register custom themes not included in Textual."""
+        from textual.theme import Theme
+        self.register_theme(Theme(
+            name="ubuntu",
+            primary="#E95420",      # Ubuntu orange
+            secondary="#772953",    # Aubergine
+            accent="#77216F",       # Purple
+            warning="#F99B11",      # Warm yellow
+            error="#DF382C",        # Red
+            success="#38B44A",      # Green
+            surface="#2C001E",      # Dark aubergine
+            panel="#3C0028",
+            dark=True,
+        ))
+
+    def _apply_settings(self) -> None:
+        """Apply loaded settings."""
+        s = self._settings
+        if s.theme and s.theme in self.available_themes:
+            self.theme = s.theme
+        if s.pads_directory:
+            from pathlib import Path
+            pad_module.PADS_DIR = Path(s.pads_directory)
+        try:
+            self.query_one(StatusBar).total_visible = s.show_totals
+        except Exception:
+            pass
 
     # --- Tab management ---
 
@@ -1643,13 +1855,14 @@ class RecknApp(App):
 
     def _close_tab(self, index: int) -> None:
         if len(self.tabs) <= 1:
-            # Last tab — clear it instead of closing
+            # Last tab — just clear it, keep same name
             tab = self.tabs[0]
             tab.editor.clear()
             tab.pad = None
             tab.is_modified = False
-            tab.display_name = f"new pad {self._new_pad_counter}"
-            self._new_pad_counter += 1
+            if not tab.display_name.startswith("new pad"):
+                tab.display_name = f"new pad {self._new_pad_counter}"
+                self._new_pad_counter += 1
             tab.editor.reset_undo()
             self._refresh_tab_bar()
             self._refresh_status_bar()
@@ -1712,10 +1925,13 @@ class RecknApp(App):
     # --- Menu bar handlers ---
 
     def on_menu_bar_about_clicked(self, message: MenuBar.AboutClicked) -> None:
-        self.push_screen(AboutScreen(), lambda _: None)
+        self.action_show_about()
 
     def on_menu_bar_file_clicked(self, message: MenuBar.FileClicked) -> None:
         self.action_toggle_file_menu()
+
+    def on_menu_bar_settings_clicked(self, message: MenuBar.SettingsClicked) -> None:
+        self.action_toggle_settings()
 
     def on_menu_bar_help_clicked(self, message: MenuBar.HelpClicked) -> None:
         self.action_toggle_help()
@@ -1723,21 +1939,94 @@ class RecknApp(App):
     def on_tab_bar_tab_clicked(self, message: TabBar.TabClicked) -> None:
         self._switch_to_tab(message.tab_index)
 
+    def action_show_about(self) -> None:
+        self.push_screen(AboutScreen(), lambda _: None)
+
     def action_toggle_help(self) -> None:
         if isinstance(self.screen, HelpScreen):
             self.screen.dismiss("")
             return
         self.push_screen(HelpScreen(), lambda _: None)
 
+    def action_toggle_settings(self) -> None:
+        if isinstance(self.screen, SettingsMenuScreen):
+            self.screen.dismiss("")
+            return
+        try:
+            show_totals = self.query_one(StatusBar).total_visible
+        except Exception:
+            show_totals = self._settings.show_totals
+        self.push_screen(
+            SettingsMenuScreen(self.theme or "textual-dark", show_totals),
+            self._handle_settings_menu
+        )
+
+    def _handle_settings_menu(self, action: str) -> None:
+        if not action:
+            return
+        if action == "pick_theme":
+            self.push_screen(
+                ThemePickerScreen(self.theme or "textual-dark"),
+                self._handle_theme_picked
+            )
+        elif action == "pick_pads_dir":
+            pads_dir = self._settings.pads_directory or str(pad_module.PADS_DIR)
+            self.push_screen(
+                PadsDirectoryScreen(pads_dir),
+                self._handle_pads_dir_picked
+            )
+        elif action == "toggle_total":
+            self.action_toggle_total()
+
+    def _handle_theme_picked(self, theme_name: str) -> None:
+        if not theme_name:
+            return
+        if theme_name in self.available_themes:
+            self.theme = theme_name
+            self._settings.theme = theme_name
+            save_settings(self._settings)
+
+    def _handle_pads_dir_picked(self, new_dir: str) -> None:
+        if not new_dir:
+            return
+        from pathlib import Path
+        import shutil
+        path = Path(new_dir).expanduser()
+        old_path = pad_module.PADS_DIR
+
+        # Validate: can't be a file
+        if path.exists() and not path.is_dir():
+            self.notify(f"Not a directory: {path}", severity="error")
+            return
+
+        # Create if needed
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self.notify(f"Cannot create directory: {e}", severity="error")
+            return
+
+        # Move existing pads if old dir has files
+        if old_path.exists() and old_path != path:
+            pad_files = list(old_path.glob("*.json"))
+            if pad_files:
+                for f in pad_files:
+                    dest = path / f.name
+                    if not dest.exists():
+                        shutil.move(str(f), str(dest))
+                self.notify(f"Moved {len(pad_files)} pad(s) to {path}")
+
+        pad_module.PADS_DIR = path
+        default_dir = str(Path.home() / ".config" / "reckn" / "pads")
+        self._settings.pads_directory = str(path) if str(path) != default_dir else ""
+        save_settings(self._settings)
+        self.notify(f"Pads directory: {path}")
+
     def action_toggle_file_menu(self) -> None:
         if isinstance(self.screen, FileMenuScreen):
             self.screen.dismiss("")
             return
-        try:
-            total_visible = self.query_one(StatusBar).total_visible
-        except Exception:
-            total_visible = True
-        self.push_screen(FileMenuScreen(total_visible), self._handle_file_menu)
+        self.push_screen(FileMenuScreen(), self._handle_file_menu)
 
     def _handle_file_menu(self, action: str) -> None:
         if not action:
@@ -2022,6 +2311,8 @@ class RecknApp(App):
         try:
             status_bar = self.query_one(StatusBar)
             status_bar.total_visible = not status_bar.total_visible
+            self._settings.show_totals = status_bar.total_visible
+            save_settings(self._settings)
             if status_bar.total_visible:
                 self.notify("Floating total shown")
             else:
