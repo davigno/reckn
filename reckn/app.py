@@ -11,7 +11,7 @@ from textual.message import Message
 from textual import events
 from rich.text import Text
 
-from .evaluator import LineEvaluator
+from .evaluator import LineEvaluator, format_config
 from .pad import Pad, save_pad, load_pad, load_pad_from_path, list_pads
 from .highlighter import highlight_line
 from .settings import Settings, load_settings, save_settings
@@ -40,6 +40,8 @@ class EditorLine(Static):
     text = reactive("", init=False)
     cursor_pos = reactive(0)
 
+    _SMART_SPACE_OPS = set("+-*/^=")
+
     def __init__(self, text: str = "", line_number: int = 0) -> None:
         super().__init__()
         self._text = text
@@ -47,6 +49,7 @@ class EditorLine(Static):
         self.cursor_pos = len(text)
         self.can_focus = True
         self._known_variables: set = set()
+        self.smart_spaces: bool = False
 
     @property
     def text(self) -> str:
@@ -145,8 +148,29 @@ class EditorLine(Static):
                 self.insert_text(first_line)
             event.stop()
         elif event.character and event.character.isprintable() and not event.key.startswith("alt+"):
-            self.text = self._text[:self.cursor_pos] + event.character + self._text[self.cursor_pos:]
-            self.cursor_pos += 1
+            ch = event.character
+            if self.smart_spaces and ch in self._SMART_SPACE_OPS:
+                before = self._text[:self.cursor_pos]
+                after = self._text[self.cursor_pos:]
+                stripped = before.rstrip()
+                # Skip smart spacing for unary minus/plus (start of line or after operator/open paren)
+                is_unary = ch in "+-" and (not stripped or stripped[-1] in "+-*/^=(")
+                if is_unary:
+                    self.text = before + ch + after
+                    self.cursor_pos = len(before) + 1
+                else:
+                    # Add space before operator if not already there
+                    if before and before[-1] != " ":
+                        before += " "
+                    # Add space after operator
+                    insert = before + ch
+                    if not after or after[0] != " ":
+                        insert += " "
+                    self.text = insert + after
+                    self.cursor_pos = len(insert)
+            else:
+                self.text = self._text[:self.cursor_pos] + ch + self._text[self.cursor_pos:]
+                self.cursor_pos += 1
             event.stop()
 
     def insert_text(self, text: str) -> None:
@@ -179,6 +203,29 @@ class EditorLine(Static):
         editor = self._get_editor()
         if editor:
             editor.current_line = self.line_number
+
+
+class LineNumber(Static):
+    """Line number gutter label."""
+
+    DEFAULT_CSS = """
+    LineNumber {
+        width: 4;
+        min-width: 4;
+        height: auto;
+        padding: 0 1 0 0;
+        text-align: right;
+        color: $text-disabled;
+    }
+    """
+
+    def __init__(self, number: int) -> None:
+        super().__init__(str(number + 1))
+        self.number = number
+
+    def update_number(self, number: int) -> None:
+        self.number = number
+        self.update(str(number + 1))
 
 
 class LineRow(Horizontal):
@@ -299,11 +346,14 @@ class Editor(Vertical):
     MAX_UNDO = 200
     UNDO_DEBOUNCE_SECONDS = 1.0  # Group typing bursts into one undo step
 
-    def __init__(self, initial_lines: list[str] | None = None, **kwargs) -> None:
+    def __init__(self, initial_lines: list[str] | None = None, show_line_numbers: bool = False, smart_spaces: bool = False, **kwargs) -> None:
         super().__init__(**kwargs)
         self._initial_lines = initial_lines or [""]
+        self._show_line_numbers = show_line_numbers
+        self._smart_spaces = smart_spaces
         self.lines: list[EditorLine] = []
         self.result_lines: list[ResultLine] = []
+        self.line_numbers: list[LineNumber] = []
         # Undo/redo stacks: each entry is (lines_text, cursor_line, cursor_pos)
         self._undo_stack: list[tuple[list[str], int, int]] = []
         self._redo_stack: list[tuple[list[str], int, int]] = []
@@ -314,11 +364,15 @@ class Editor(Vertical):
     def compose(self) -> ComposeResult:
         """Create initial line rows from initial_lines."""
         for i, text in enumerate(self._initial_lines):
+            line_num = LineNumber(i)
+            line_num.display = self._show_line_numbers
             editor_line = EditorLine(text, line_number=i)
+            editor_line.smart_spaces = self._smart_spaces
             result_line = ResultLine(line_number=i)
+            self.line_numbers.append(line_num)
             self.lines.append(editor_line)
             self.result_lines.append(result_line)
-            yield LineRow(editor_line, result_line)
+            yield LineRow(line_num, editor_line, result_line)
 
     def on_mount(self) -> None:
         """Focus the first line on mount."""
@@ -440,17 +494,22 @@ class Editor(Vertical):
             return False
         if after_index < 0:
             after_index = len(self.lines) - 1
+        line_num = LineNumber(after_index + 1)
+        line_num.display = self._show_line_numbers
         editor_line = EditorLine(text, line_number=after_index + 1)
+        editor_line.smart_spaces = self._smart_spaces
         result_line = ResultLine(line_number=after_index + 1)
         insert_pos = after_index + 1
+        self.line_numbers.insert(insert_pos, line_num)
         self.lines.insert(insert_pos, editor_line)
         self.result_lines.insert(insert_pos, result_line)
         # Renumber lines after insertion
         for i in range(insert_pos, len(self.lines)):
             self.lines[i].line_number = i
             self.result_lines[i].line_number = i
+            self.line_numbers[i].update_number(i)
         # Mount the row after the specified line's row
-        row = LineRow(editor_line, result_line)
+        row = LineRow(line_num, editor_line, result_line)
         after_row = self.lines[after_index].parent
         if after_index < len(self.lines) - 1 and after_row:
             self.mount(row, after=after_row)
@@ -468,6 +527,7 @@ class Editor(Vertical):
             return False
         editor_line = self.lines.pop(index)
         self.result_lines.pop(index)
+        self.line_numbers.pop(index)
         # Remove the entire row (parent of editor_line)
         row = editor_line.parent
         if row:
@@ -478,6 +538,7 @@ class Editor(Vertical):
         for i in range(index, len(self.lines)):
             self.lines[i].line_number = i
             self.result_lines[i].line_number = i
+            self.line_numbers[i].update_number(i)
         if notify:
             self.post_message(self.LineRemoved(index))
         self._push_snapshot()
@@ -566,6 +627,18 @@ class Editor(Vertical):
         self._undo_stack.clear()
         self._redo_stack.clear()
         self._push_snapshot()
+
+    def set_line_numbers_visible(self, visible: bool) -> None:
+        """Show or hide line number gutter."""
+        self._show_line_numbers = visible
+        for ln in self.line_numbers:
+            ln.display = visible
+
+    def set_smart_spaces(self, enabled: bool) -> None:
+        """Enable or disable smart spaces on all lines."""
+        self._smart_spaces = enabled
+        for line in self.lines:
+            line.smart_spaces = enabled
 
     def clear(self) -> None:
         """Clear all lines (keep just one empty line)."""
@@ -1153,7 +1226,7 @@ class SettingsMenuScreen(ModalScreen[str]):
         background: transparent;
     }
     #settings-menu-box {
-        width: 32;
+        width: 36;
         height: auto;
         background: $surface;
         border: solid $primary;
@@ -1166,14 +1239,22 @@ class SettingsMenuScreen(ModalScreen[str]):
         Binding("f2", "close", "Close"),
     ]
 
-    def __init__(self, current_theme: str, show_totals: bool) -> None:
+    def __init__(self, current_theme: str, settings: Settings) -> None:
         super().__init__()
         self._highlighted = 0
-        total_label = "Hide Total" if show_totals else "Show Total"
+        total_label = "Hide Total" if settings.show_totals else "Show Total"
+        ln_label = "Hide Line Numbers" if settings.show_line_numbers else "Show Line Numbers"
+        sep_label = "Disable Thousands Separator" if settings.thousands_separator else "Enable Thousands Separator"
+        fmt_label = f"Large Numbers: {'SI (100k)' if settings.large_number_format == 'si' else 'Scientific (1e5)'}"
+        smart_label = "Disable Smart Spaces" if settings.smart_spaces else "Enable Smart Spaces"
         self._menu_items = [
             (f"Theme: {current_theme}", "", "pick_theme"),
             ("Pads directory", "", "pick_pads_dir"),
             (total_label, "Ctrl+T", "toggle_total"),
+            (ln_label, "", "toggle_line_numbers"),
+            (sep_label, "", "toggle_thousands_sep"),
+            (fmt_label, "", "toggle_large_number_fmt"),
+            (smart_label, "", "toggle_smart_spaces"),
         ]
 
     def compose(self) -> ComposeResult:
@@ -1617,7 +1698,7 @@ class QuitScreen(ModalScreen[list[int] | None]):
     DEFAULT_CSS = """
     QuitScreen { align: center middle; }
     #quit-dialog {
-        width: 50;
+        width: 60;
         height: auto;
         max-height: 80%;
         border: thick $warning;
@@ -1627,10 +1708,11 @@ class QuitScreen(ModalScreen[list[int] | None]):
     #quit-dialog Label { width: 100%; padding-bottom: 1; }
     .quit-checkbox { padding: 0 2; }
     #quit-buttons { width: 100%; height: auto; align: center middle; padding-top: 1; }
-    #quit-buttons Button { margin: 0 1; }
     """
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
 
     def __init__(self, unsaved_tabs: list[tuple[int, str]]) -> None:
         super().__init__()
@@ -1642,22 +1724,50 @@ class QuitScreen(ModalScreen[list[int] | None]):
             for idx, name in self._unsaved_tabs:
                 yield Checkbox(name, value=True, id=f"quit-cb-{idx}", classes="quit-checkbox")
             with Horizontal(id="quit-buttons"):
-                yield Button("Save & Quit", variant="primary", id="save-quit-btn")
-                yield Button("Quit", variant="warning", id="quit-btn")
-                yield Button("Cancel", id="cancel-btn")
+                yield Button("[u]S[/u]ave & Quit", variant="primary", id="save-quit-btn")
+                yield Button("[u]Q[/u]uit", variant="warning", id="quit-btn")
+                yield Button("[u]C[/u]ancel", id="cancel-btn")
+
+    def on_mount(self) -> None:
+        self.query_one("#save-quit-btn", Button).focus()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "s":
+            event.stop()
+            event.prevent_default()
+            self._do_save_quit()
+        elif event.key == "q":
+            event.stop()
+            event.prevent_default()
+            self.dismiss([])
+        elif event.key == "c":
+            event.stop()
+            event.prevent_default()
+            self.dismiss(None)
+        elif event.key in ("tab", "down", "right"):
+            event.stop()
+            event.prevent_default()
+            self.focus_next()
+        elif event.key in ("shift+tab", "up", "left"):
+            event.stop()
+            event.prevent_default()
+            self.focus_previous()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-quit-btn":
-            to_save = []
-            for idx, name in self._unsaved_tabs:
-                cb = self.query_one(f"#quit-cb-{idx}", Checkbox)
-                if cb.value:
-                    to_save.append(idx)
-            self.dismiss(to_save)
+            self._do_save_quit()
         elif event.button.id == "quit-btn":
             self.dismiss([])
         elif event.button.id == "cancel-btn":
             self.dismiss(None)
+
+    def _do_save_quit(self) -> None:
+        to_save = []
+        for idx, name in self._unsaved_tabs:
+            cb = self.query_one(f"#quit-cb-{idx}", Checkbox)
+            if cb.value:
+                to_save.append(idx)
+        self.dismiss(to_save)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1698,6 +1808,18 @@ class RecknApp(App):
         Binding("ctrl+y", "redo", "Redo", show=False),
     ]
 
+    _MODAL_BLOCKED_ACTIONS = frozenset({
+        "quit", "next_tab", "close_tab", "save", "open_pad", "new_pad",
+        "export", "toggle_total", "toggle_comment", "delete_line", "copy",
+        "undo", "redo", "toggle_file_menu", "toggle_settings",
+        "toggle_help", "show_about",
+    })
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if self.screen.is_modal and action in self._MODAL_BLOCKED_ACTIONS:
+            return False
+        return True
+
     def __init__(self, pad_name: str | None = None) -> None:
         super().__init__()
         self.evaluator = LineEvaluator()
@@ -1722,7 +1844,7 @@ class RecknApp(App):
 
     def compose(self) -> ComposeResult:
         """Compose the UI."""
-        initial_editor = Editor(id="editor-1")
+        initial_editor = Editor(show_line_numbers=self._settings.show_line_numbers, smart_spaces=self._settings.smart_spaces, id="editor-1")
         yield MenuBar()
         with Vertical(id="main-container"):
             yield initial_editor
@@ -1823,7 +1945,7 @@ class RecknApp(App):
         self._next_tab_id += 1
 
         lines = pad.lines if pad and pad.lines else None
-        editor = Editor(initial_lines=lines, id=f"editor-{tab_id}")
+        editor = Editor(initial_lines=lines, show_line_numbers=self._settings.show_line_numbers, smart_spaces=self._settings.smart_spaces, id=f"editor-{tab_id}")
 
         container = self.query_one("#main-container", Vertical)
         container.mount(editor)
@@ -1953,11 +2075,11 @@ class RecknApp(App):
             self.screen.dismiss("")
             return
         try:
-            show_totals = self.query_one(StatusBar).total_visible
+            self._settings.show_totals = self.query_one(StatusBar).total_visible
         except Exception:
-            show_totals = self._settings.show_totals
+            pass
         self.push_screen(
-            SettingsMenuScreen(self.theme or "textual-dark", show_totals),
+            SettingsMenuScreen(self.theme or "textual-dark", self._settings),
             self._handle_settings_menu
         )
 
@@ -1977,6 +2099,48 @@ class RecknApp(App):
             )
         elif action == "toggle_total":
             self.action_toggle_total()
+        elif action == "toggle_line_numbers":
+            self._toggle_line_numbers()
+        elif action == "toggle_thousands_sep":
+            self._toggle_thousands_separator()
+        elif action == "toggle_large_number_fmt":
+            self._toggle_large_number_format()
+        elif action == "toggle_smart_spaces":
+            self._toggle_smart_spaces()
+
+    def _toggle_line_numbers(self) -> None:
+        self._settings.show_line_numbers = not self._settings.show_line_numbers
+        for tab in self.tabs:
+            if tab.editor:
+                tab.editor.set_line_numbers_visible(self._settings.show_line_numbers)
+        save_settings(self._settings)
+        label = "on" if self._settings.show_line_numbers else "off"
+        self.notify(f"Line numbers {label}")
+
+    def _toggle_thousands_separator(self) -> None:
+        self._settings.thousands_separator = not self._settings.thousands_separator
+        save_settings(self._settings)
+        label = "on" if self._settings.thousands_separator else "off"
+        self.notify(f"Thousands separator {label}")
+        self._schedule_evaluation()
+
+    def _toggle_large_number_format(self) -> None:
+        if self._settings.large_number_format == "si":
+            self._settings.large_number_format = "scientific"
+        else:
+            self._settings.large_number_format = "si"
+        save_settings(self._settings)
+        self.notify(f"Large numbers: {self._settings.large_number_format.upper()}")
+        self._schedule_evaluation()
+
+    def _toggle_smart_spaces(self) -> None:
+        self._settings.smart_spaces = not self._settings.smart_spaces
+        for tab in self.tabs:
+            if tab.editor:
+                tab.editor.set_smart_spaces(self._settings.smart_spaces)
+        save_settings(self._settings)
+        label = "on" if self._settings.smart_spaces else "off"
+        self.notify(f"Smart spaces {label}")
 
     def _handle_theme_picked(self, theme_name: str) -> None:
         if not theme_name:
@@ -2130,6 +2294,10 @@ class RecknApp(App):
     def _do_evaluation(self) -> None:
         self._eval_pending = False
         editor = self.active_editor
+
+        # Sync formatting settings
+        format_config["thousands_separator"] = self._settings.thousands_separator
+        format_config["large_number_format"] = self._settings.large_number_format
 
         lines = editor.get_all_text()
         self.evaluator = LineEvaluator()

@@ -12,6 +12,10 @@ class Settings:
     theme: str = "textual-dark"
     pads_directory: str = ""  # Empty = default (~/.config/reckn/pads)
     show_totals: bool = True
+    show_line_numbers: bool = False
+    thousands_separator: bool = True
+    large_number_format: str = "si"  # "si" or "scientific"
+    smart_spaces: bool = False
 
 
 def load_settings() -> Settings:
@@ -25,6 +29,10 @@ def load_settings() -> Settings:
             theme=data.get("theme", "textual-dark"),
             pads_directory=data.get("pads_directory", ""),
             show_totals=data.get("show_totals", True),
+            show_line_numbers=data.get("show_line_numbers", False),
+            thousands_separator=data.get("thousands_separator", True),
+            large_number_format=data.get("large_number_format", "si"),
+            smart_spaces=data.get("smart_spaces", False),
         )
     except (json.JSONDecodeError, IOError):
         return Settings()

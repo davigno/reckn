@@ -15,6 +15,12 @@ except ImportError:
     from percentages import try_parse_percentage_expression, PercentageResult, ParsedValue
     from proportions import try_parse_proportion, ProportionResult
 
+# Formatting configuration (set by the app from settings)
+format_config = {
+    "thousands_separator": True,
+    "large_number_format": "si",  # "si" or "scientific"
+}
+
 # Lazy imports to avoid circular dependencies
 _units_module = None
 _currencies_module = None
@@ -874,6 +880,35 @@ class Evaluator:
         raise ValueError(f"Unexpected token: {token}")
 
 
+_SI_SUFFIXES = [
+    (1e15, "Q"),   # quadrillion
+    (1e12, "T"),   # trillion
+    (1e9,  "B"),   # billion
+    (1e6,  "M"),   # million
+    (1e3,  "k"),   # thousand
+]
+
+
+def _format_si(value: float) -> str:
+    """Format a number with SI suffix (e.g., 1.5T, 2.3M)."""
+    abs_val = abs(value)
+    for threshold, suffix in _SI_SUFFIXES:
+        if abs_val >= threshold:
+            scaled = value / threshold
+            if scaled == int(scaled):
+                return f"{int(scaled)}{suffix}"
+            formatted = f"{scaled:.2f}".rstrip('0').rstrip('.')
+            return f"{formatted}{suffix}"
+    return str(value)
+
+
+def _strip_commas(s: str) -> str:
+    """Remove thousand separators if disabled in settings."""
+    if not format_config["thousands_separator"]:
+        return s.replace(",", "")
+    return s
+
+
 def format_number(
     value: float,
     decimal_places: int = 6
@@ -882,21 +917,28 @@ def format_number(
     if value is None:
         return ""
 
-    # Use scientific notation for very large or very small numbers
     abs_val = abs(value)
-    if abs_val != 0 and (abs_val >= 1e12 or abs_val < 1e-6):
+
+    # Very small numbers always use scientific notation
+    if abs_val != 0 and abs_val < 1e-6:
+        return f"{value:.6g}"
+
+    # Large numbers: SI suffixes (1.5T) or scientific (1.5e+12)
+    if abs_val != 0 and abs_val >= 1e12:
+        if format_config["large_number_format"] == "si":
+            return _format_si(value)
         return f"{value:.6g}"
 
     # Check if it's effectively an integer
     if value == int(value) and abs_val < 1e15:
-        return f"{int(value):,}"
+        return _strip_commas(f"{int(value):,}")
 
     # Format with specified decimal places, then strip trailing zeros
     formatted = f"{value:,.{decimal_places}f}"
     if '.' in formatted:
         formatted = formatted.rstrip('0').rstrip('.')
 
-    return formatted
+    return _strip_commas(formatted)
 
 
 def format_value(val: Value) -> str:
@@ -939,9 +981,9 @@ def format_value(val: Value) -> str:
 
         # Format with 2 decimal places for currency
         if val.value == int(val.value):
-            formatted = f"{int(val.value):,}"
+            formatted = _strip_commas(f"{int(val.value):,}")
         else:
-            formatted = f"{val.value:,.2f}"
+            formatted = _strip_commas(f"{val.value:,.2f}")
 
         # Prefix symbols for major currencies
         if symbol in ('$', '£', '€', '¥'):
